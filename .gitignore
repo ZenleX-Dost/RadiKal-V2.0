@@ -248,9 +248,10 @@ $RECYCLE.BIN/
 # Project Specific - ML/AI
 # ============================================================================
 
-# Model checkpoints and weights
-*.pth
-*.pt
+# Model checkpoints and weights (tracked via Git LFS)
+# Note: .pt and .pth files are now tracked with Git LFS
+# *.pth
+# *.pt
 *.ckpt
 *.h5
 *.pb
@@ -259,14 +260,12 @@ $RECYCLE.BIN/
 *.bin
 *.safetensors
 
-# Except initial/pretrained models (if you want to keep some)
-!backend/models/pretrained/*.pth
-!backend/models/pretrained/*.pt
+# Training epoch checkpoints (exclude intermediate epochs to save space)
+backend/models/yolo/*/weights/epoch*.pt
 
-# Model checkpoints directory (keep structure but not files)
-backend/models/checkpoints/*.pth
-backend/models/checkpoints/*.pt
-backend/models/checkpoints/*.ckpt
+# Keep only best and last models
+!backend/models/yolo/*/weights/best.pt
+!backend/models/yolo/*/weights/last.pt
 
 # MLflow
 mlruns/

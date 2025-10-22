@@ -55,9 +55,9 @@ mlartifacts/
 .dvc/cache/
 .dvc/tmp/
 
-# Model files (large)
-*.pth
-*.pt
+# Model files (tracked via Git LFS in root .gitignore)
+# *.pth
+# *.pt
 *.h5
 *.onnx
 *.pb
