@@ -1,0 +1,69 @@
+# Pre-commit hooks configuration for XAI Visual Quality Control
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.5.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-added-large-files
+        args: ['--maxkb=5000']
+      - id: check-json
+      - id: check-merge-conflict
+      - id: detect-private-key
+
+  - repo: https://github.com/psf/black
+    rev: 23.12.1
+    hooks:
+      - id: black
+        language_version: python3.10
+        args: ['--line-length=100']
+
+  - repo: https://github.com/pycqa/isort
+    rev: 5.13.2
+    hooks:
+      - id: isort
+        args: ['--profile', 'black', '--line-length', '100']
+
+  - repo: https://github.com/pycqa/flake8
+    rev: 7.0.0
+    hooks:
+      - id: flake8
+        args: ['--max-line-length=127', '--extend-ignore=E203,W503']
+
+  - repo: local
+    hooks:
+      - id: check-changelog
+        name: Check CHANGELOG.md updated
+        entry: python
+        language: system
+        pass_filenames: false
+        always_run: true
+        args:
+          - -c
+          - |
+            import subprocess
+            import sys
+            result = subprocess.run(['git', 'diff', '--cached', '--name-only'], capture_output=True, text=True)
+            if 'backend/CHANGELOG.md' not in result.stdout:
+                print('ERROR: CHANGELOG.md must be updated before committing!')
+                print('Please document your changes in backend/CHANGELOG.md')
+                sys.exit(1)
+      
+      - id: check-dev-register
+        name: Check DEVELOPMENT_REGISTER.json updated
+        entry: python
+        language: system
+        pass_filenames: false
+        always_run: true
+        args:
+          - -c
+          - |
+            import subprocess
+            import sys
+            result = subprocess.run(['git', 'diff', '--cached', '--name-only'], capture_output=True, text=True)
+            if 'backend/DEVELOPMENT_REGISTER.json' not in result.stdout:
+                print('ERROR: DEVELOPMENT_REGISTER.json must be updated before committing!')
+                print('Please add an entry to backend/DEVELOPMENT_REGISTER.json')
+                sys.exit(1)

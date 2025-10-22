@@ -1,0 +1,14 @@
+artifact_uri: file:///C:/Users/Amine EL-Hend/Documents/GitHub/RadiKal/backend/runs/mlflow/809728953514087462/6065f644b0924b9bb5c2e9063a8cf18e/artifacts
+end_time: 1760922086045
+entry_point_name: ''
+experiment_id: '809728953514087462'
+lifecycle_stage: active
+run_id: 6065f644b0924b9bb5c2e9063a8cf18e
+run_name: radikal_weld_detection
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1760910243402
+status: 3
+tags: []
+user_id: Amine EL-Hend

@@ -1,0 +1,424 @@
+# RadiKal XAI Project - Git Ignore File
+
+# ============================================================================
+# Python
+# ============================================================================
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+cover/
+
+# Translations
+*.mo
+*.pot
+
+# Django stuff:
+*.log
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+
+# Flask stuff:
+instance/
+.webassets-cache
+
+# Scrapy stuff:
+.scrapy
+
+# Sphinx documentation
+docs/_build/
+
+# PyBuilder
+.pybuilder/
+target/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*.ipynb_checkpoints/
+
+# IPython
+profile_default/
+ipython_config.py
+
+# pyenv
+.python-version
+
+# pipenv
+Pipfile.lock
+
+# poetry
+poetry.lock
+
+# pdm
+.pdm.toml
+
+# PEP 582
+__pypackages__/
+
+# Celery stuff
+celerybeat-schedule
+celerybeat.pid
+
+# SageMath parsed files
+*.sage.py
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Spyder project settings
+.spyderproject
+.spyproject
+
+# Rope project settings
+.ropeproject
+
+# mkdocs documentation
+/site
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
+
+# pytype static type analyzer
+.pytype/
+
+# Cython debug symbols
+cython_debug/
+
+# ============================================================================
+# Node.js / Frontend
+# ============================================================================
+
+# Dependencies
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+.pnpm-debug.log*
+
+# Testing
+/coverage
+
+# Next.js
+.next/
+out/
+.vercel
+
+# Production
+/build
+
+# Misc
+.DS_Store
+*.pem
+
+# Debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Local env files
+.env*.local
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Turbo
+.turbo
+
+# ============================================================================
+# IDEs and Editors
+# ============================================================================
+
+# VS Code
+.vscode/
+*.code-workspace
+.history/
+
+# PyCharm
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Vim
+*.swp
+*.swo
+*~
+
+# Emacs
+*~
+\#*\#
+.\#*
+
+# Eclipse
+.project
+.classpath
+.settings/
+
+# NetBeans
+nbproject/
+
+# ============================================================================
+# Operating System Files
+# ============================================================================
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Linux
+*~
+.directory
+.Trash-*
+
+# ============================================================================
+# Project Specific - ML/AI
+# ============================================================================
+
+# Model checkpoints and weights
+*.pth
+*.pt
+*.ckpt
+*.h5
+*.pb
+*.onnx
+*.tflite
+*.bin
+*.safetensors
+
+# Except initial/pretrained models (if you want to keep some)
+!backend/models/pretrained/*.pth
+!backend/models/pretrained/*.pt
+
+# Model checkpoints directory (keep structure but not files)
+backend/models/checkpoints/*.pth
+backend/models/checkpoints/*.pt
+backend/models/checkpoints/*.ckpt
+
+# MLflow
+mlruns/
+mlartifacts/
+backend/mlruns/
+backend/mlartifacts/
+
+# DVC
+.dvc/tmp/
+.dvc/cache/
+
+# Datasets (large files)
+*.hdf5
+*.h5
+*.tfrecord
+
+# Keep DVC tracked files
+!*.dvc
+!.dvc/config
+!.dvc/.gitignore
+
+# Logs
+logs/
+*.log
+backend/logs/
+frontend/logs/
+
+# Exports
+exports/
+backend/exports/*.pdf
+backend/exports/*.xlsx
+backend/exports/*.csv
+backend/exports/*.json
+
+# ============================================================================
+# Project Specific - Data
+# ============================================================================
+
+# Original dataset (large files - not for GitHub)
+DATA/
+data/
+extradata/
+
+# Processed/generated datasets
+backend/data/train/
+backend/data/val/
+backend/data/test/
+backend/data/raw/
+backend/data/processed/
+backend/data/cache/
+
+# Keep directory structure and metadata
+!backend/data/.gitkeep
+!backend/data/dataset_metadata.json
+!backend/data/dataset_card.yaml
+
+# Temporary data
+*.tmp
+*.temp
+temp/
+tmp/
+
+# ============================================================================
+# Docker
+# ============================================================================
+
+# Docker volumes
+docker-volumes/
+
+# ============================================================================
+# Miscellaneous
+# ============================================================================
+
+# Backup files
+*.bak
+*.backup
+*.old
+*~
+
+# Compressed files
+*.zip
+*.tar
+*.tar.gz
+*.rar
+*.7z
+
+# Except documentation archives
+!docs/**/*.zip
+!docs/**/*.tar.gz
+
+# Secrets and credentials
+secrets/
+*.key
+*.pem
+*.crt
+*.cer
+*.p12
+*.pfx
+credentials.json
+config/secrets.yaml
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Cache directories
+.cache/
+*.cache/
+
+# Temporary files
+*.tmp
+*.swp
+*.swo
+
+# Lock files (optional - uncomment if you want to ignore)
+# package-lock.json
+# yarn.lock
+# poetry.lock
+
+# ============================================================================
+# Keep These Files (Exceptions)
+# ============================================================================
+
+# Documentation
+!README.md
+!CHANGELOG.md
+!LICENSE
+!docs/**/*.md
+
+# Configuration templates
+!.env.example
+!config.example.json
+!backend/.env.example
+
+# Git hooks
+!.githooks/
+
+# CI/CD
+!.github/
+!.gitlab-ci.yml
+!.circleci/
+
+# DVC
+!dvc.yaml
+!dvc.lock
+!.dvc/config
+
+# Docker
+!Dockerfile
+!docker-compose.yml
+!.dockerignore
+
+# Project structure markers
+!.gitkeep

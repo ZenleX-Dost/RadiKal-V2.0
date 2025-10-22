@@ -1,0 +1,66 @@
+name: xai-qc-model
+description: Defect detection and segmentation model for XAI quality control
+
+model:
+  name: Faster R-CNN ResNet-50 FPN
+  version: 0.1.0
+  framework: PyTorch 2.1.0
+  architecture: Faster R-CNN with ResNet-50 backbone and FPN
+  task: Object Detection and Defect Segmentation
+
+training:
+  hardware: NVIDIA RTX 4050 (6GB VRAM)
+  training_date: 2025-10-14
+  total_epochs: 50
+  batch_size: 8
+  optimizer: AdamW
+  learning_rate: 0.0001
+  image_size: [512, 512]
+  training_time: TBD
+  
+dataset:
+  name: Radiographic Defect Dataset
+  version: 1.0
+  num_train_samples: TBD
+  num_val_samples: TBD
+  num_classes: 2
+  class_names:
+    - background
+    - defect
+
+performance:
+  metrics:
+    mAP@0.5: TBD
+    mAP@0.75: TBD
+    precision: TBD
+    recall: TBD
+    f1_score: TBD
+  inference_latency_ms: <200
+  device: CPU and GPU
+
+xai_capabilities:
+  methods:
+    - Grad-CAM
+    - SHAP
+    - LIME
+    - Integrated Gradients
+  aggregation: Yes
+  uncertainty_quantification: MC-Dropout
+
+intended_use:
+  primary: Defect detection in radiographic and standard vision images
+  users: Quality control operators and administrators
+  out_of_scope: Medical diagnosis, real-time video processing
+
+limitations:
+  - Requires retraining for new defect types
+  - Performance may vary with image quality
+  - Trained on specific radiographic data distribution
+
+ethical_considerations:
+  - Model explanations should be reviewed by domain experts
+  - False negatives can have serious consequences in quality control
+  - Regular calibration monitoring required
+
+license: MIT
+contact: radikal-team@example.com

@@ -1,0 +1,56 @@
+{
+  "experiment_name": "xai-qc-defect-detection",
+  "mlflow_tracking_uri": "file:./mlruns",
+  
+  "num_epochs": 50,
+  "batch_size": 16,
+  "learning_rate": 0.0001,
+  "weight_decay": 0.0001,
+  "num_classes": 4,
+  "image_size": [224, 224],
+  
+  "train_image_dir": "data/train/images",
+  "train_annotations": "data/train/annotations/annotations.json",
+  "val_image_dir": "data/val/images",
+  "val_annotations": "data/val/annotations/annotations.json",
+  
+  "checkpoint_dir": "models/checkpoints",
+  "num_workers": 4,
+  
+  "gpu_optimization": {
+    "enabled": true,
+    "device": "cuda:0",
+    "mixed_precision": true,
+    "gradient_accumulation_steps": 1,
+    "max_grad_norm": 1.0
+  },
+  
+  "rtx4050_settings": {
+    "batch_size_note": "Optimized for RTX 4050 with 6GB VRAM",
+    "recommended_batch_sizes": {
+      "224x224": 16,
+      "512x512": 8,
+      "640x640": 6,
+      "1024x1024": 2
+    },
+    "memory_optimization": {
+      "pin_memory": true,
+      "gradient_checkpointing": false,
+      "empty_cache_frequency": "every_batch"
+    }
+  },
+  
+  "augmentation": {
+    "horizontal_flip": true,
+    "vertical_flip": false,
+    "rotation_range": 10,
+    "brightness_range": [0.8, 1.2],
+    "contrast_range": [0.8, 1.2]
+  },
+  
+  "early_stopping": {
+    "enabled": true,
+    "patience": 10,
+    "min_delta": 0.001
+  }
+}

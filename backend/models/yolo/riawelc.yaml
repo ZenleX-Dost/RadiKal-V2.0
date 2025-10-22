@@ -1,0 +1,9 @@
+names:
+  0: crack
+  1: porosity
+  2: inclusion
+  3: lack_of_fusion
+path: C:\Users\Amine EL-Hend\Documents\GitHub\RadiKal\backend\data
+train: train/images
+val: val/images
+test: test/images

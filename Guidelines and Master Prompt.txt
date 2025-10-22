@@ -1,0 +1,183 @@
+MASTER PROMPT: Production-Grade XAI Visual Quality Control Module (Makerkit Edition)
+0) Quick Instructions to the Copilot
+You are an expert software and MLOps engineer. Your task is to design, implement, test, and deliver the backend services and API for a production-grade Explainable AI (XAI) Visual Quality Control module.
+The User Interface (UI) will be a Makerkit/Next.js application. Your primary responsibility is to provide a robust, well-documented API for this UI to consume.
+Follow the architecture, deliverables, and strict rules outlined below. Adherence to the project structure and naming conventions is mandatory.
+You must deliver working backend code, comprehensive tests, documentation, and a CI/CD pipeline, all containerized with Docker.
+Crucially, you must update CHANGELOG.md and DEVELOPMENT_REGISTER.json before every commit.
+Write clean, typed Python (3.10+) using type hints, Google-style docstrings, and PEP8 formatting.
+Implement robust, well-tested minimal functionality instead of leaving TODO placeholders.
+No emojis are to be used in any generated code, documentation, or commit messages.
+1) Mission Summary & System Architecture
+A. Mission
+Build the reproducible and traceable backend module that:
+Detects and segments defects in radiographic and standard vision images.
+Generates visual explanations using Grad-CAM, SHAP, LIME, and Integrated Gradients.
+Quantifies model uncertainty (MC-Dropout, Ensembles) and performs calibration (ECE, Temperature Scaling).
+Tracks a comprehensive suite of business and technical metrics (e.g., FN, FP, mAP, IoU).
+Exposes a robust FastAPI backend with a clearly defined API contract for the Makerkit frontend.
+Integrates MLflow for experiment tracking and DVC for data and model versioning.
+B. System Architecture Layers
+code
+Code
+┌─────────────────────────────────────────┐
+│  UI Layer (Next.js with Makerkit)       │
+│  - Operator HMI Dashboard               │
+│  - Image Review & Explanation           │
+└──────────────┬──────────────────────────┘
+               │ HTTP/REST API Call
+┌──────────────▼──────────────────────────┐
+│  API Layer (FastAPI)                    │
+│  - /api/xai-qc/detect, /explain, etc.   │
+│  - Authentication & Validation Middleware │
+└──────────────┬──────────────────────────┘
+               │
+┌──────────────▼──────────────────────────┐
+│  Core ML Layer                          │
+│  - Detection/Segmentation Models        │
+│  - XAI Engines & Uncertainty Methods    │
+└──────────────┬──────────────────────────┘
+               │
+┌──────────────▼──────────────────────────┐
+│  Tooling & MLOps Layer                  │
+│  - MLflow, DVC, Model/Dataset Cards     │
+└─────────────────────────────────────────┘
+2) Mandatory SaaS Integration (Makerkit)
+Requirement: The entire system is built upon Makerkit. Your backend module is a service provider to the Makerkit Next.js frontend.
+Manifest: Set makerkit_required: true and specify makerkit_version in module.yaml. Document the Makerkit license and installation steps in README.md.
+Authentication: Your API must be secured and expect authentication tokens from the Makerkit frontend. Implement an adapter in api/middleware.py to validate Makerkit JWTs and map its roles to module-specific permissions (e.g., operator, admin).
+CI/CD: The CI pipeline must include an integration smoke test that verifies the API endpoints can be reached and that the Makerkit authentication flow is correctly handled using a stub token from CI secrets.
+3) Mandatory Files & Change Tracking
+1. CHANGELOG.md
+A human-readable log adhering to Semantic Versioning. Update before every commit.
+Example Entry:
+code
+Markdown
+## [1.2.0] - 2025-01-20
+### Added
+- `core/xai/gradcam.py`: Implemented `GradCAM.generate_heatmap`.
+- `tests/test_xai.py`: Added unit tests for GradCAM.
+### Changed
+- `core/preprocessing/image_processor.py`: Added dtype validation.
+2. DEVELOPMENT_REGISTER.json
+A machine-readable log of all changes. Append a new entry before every commit.
+JSON Object Structure:
+code
+JSON
+{
+  "timestamp": "2025-01-20T12:00:00Z",
+  "version": "1.2.0",
+  "commit_ref": "<git-hash-or-branch>",
+  "author": "<name/email>",
+  "files": ["core/xai/gradcam.py", "tests/test_xai.py"],
+  "summary": "Implemented GradCAM and tests",
+  "issues": ["JIRA-123"]
+}
+4) Project Structure (To Be Created Exactly)
+The repository will contain the Python backend and a placeholder for the frontend.
+code
+Code
+xai-quality-control/
+├── backend/                    # All Python code lives here
+│   ├── module.yaml
+│   ├── CHANGELOG.md
+│   ├── DEVELOPMENT_REGISTER.json
+│   ├── README.md
+│   ├── requirements.txt
+│   ├── Dockerfile              # Dockerfile for the FastAPI service
+│   ├── .github/workflows/ci.yml
+│   ├── api/
+│   │   ├── routes.py
+│   │   ├── schemas.py
+│   │   └── middleware.py
+│   ├── core/
+│   │   ├── models/
+│   │   ├── xai/
+│   │   ├── uncertainty/
+│   │   ├── preprocessing/
+│   │   └── metrics/
+│   ├── data/
+│   │   └── dataset_card.yaml
+│   ├── models/
+│   │   └── model_card.yaml
+│   ├── tests/
+│   ├── configs/
+│   ├── scripts/
+│   └── exports/
+├── frontend/                   # Placeholder for the Makerkit/Next.js UI
+│   └── README.md               # Describes how to set up the frontend
+└── docker-compose.yml          # To run both backend and frontend services
+5) Technical & Functional Requirements
+A. XAI Implementations (backend/core/xai/)
+Implement all four explainers. Each must return a numpy.ndarray heatmap (values in).
+gradcam.py: Class-saliency mapping for PyTorch models.
+shap_explainer.py: Image explainer using the shap library.
+lime_explainer.py: Superpixel-based LIME with deterministic seeding.
+integrated_gradients.py: IG with a configurable baseline and steps.
+aggregator.py: Combine explanations via pixel-wise mean/median and compute a consensus score.
+B. Uncertainty & Calibration (backend/core/uncertainty/)
+mc_dropout.py: Implement mc_dropout_predict(model, image, n_samples) to return (mean_prediction, variance).
+calibration.py: Implement calculate_ece(...), temperature_scaling(...), and plot_reliability_diagram(...).
+C. Metrics (backend/core/metrics/)
+business_metrics.py: Functions to calculate FN, FP, TP, TN, Precision, Recall, F1.
+detection_metrics.py: Functions for AUROC and mAP.
+segmentation_metrics.py: Functions for IoU and Dice Score.
+D. API Specification (FastAPI in backend/api/)
+Implement the following endpoints in api/routes.py with Pydantic schemas in api/schemas.py. These endpoints form the contract with the frontend.
+POST /api/xai-qc/detect: Accepts an image file, returns a DetectionResponse with detections and base64-encoded segmentation masks.
+POST /api/xai-qc/explain: Accepts an image ID, returns URLs or base64-encoded data for all four XAI heatmaps plus the aggregated result.
+GET /api/xai-qc/metrics: Returns key performance metrics over a specified date range.
+POST /api/xai-qc/export: Generates a PDF/Excel report and returns a URL to it.
+GET /api/xai-qc/calibration: Returns the current ECE and calibration status.
+GET /api/xai-qc/health: A simple health check probe.
+E. UI Requirements (to be implemented in Makerkit/Next.js)
+Your backend API must fully support a UI with the following features:
+Image Upload & Display: Ability to upload an image and view it with overlaid defect bounding boxes/masks sent from the API.
+Explanation Viewer: A tabbed or selectable interface to display each XAI heatmap (Grad-CAM, SHAP, LIME, IG, Aggregated).
+Data Display: Panels to show confidence scores, uncertainty metrics, and severity classifications.
+Actions: An "Export Report" button that triggers a call to your /export endpoint.
+6) MLOps, CI/CD, and Deployment
+A. MLOps (MLflow & DVC)
+MLflow: In scripts/train.py, log all parameters, metrics, artifacts, and the final model to MLflow.
+DVC: Create a dvc.yaml with stages for preprocess, train, and evaluate. Ensure the data/ and models/checkpoints/ directories are tracked by DVC.
+B. CI, Linting, and Pre-Commit
+CI (.github/workflows/ci.yml): Create a GitHub Actions workflow that runs pip install, pytest --cov=core, and flake8 within the backend directory.
+Pre-Commit: Add a pre-commit-config.yaml with hooks for black, isort, ruff, and a custom script that fails the commit if CHANGELOG.md or DEVELOPMENT_REGISTER.json were not modified.
+C. Docker and Deployment
+backend/Dockerfile: A multi-stage Dockerfile that creates an optimized production image for the FastAPI service.
+docker-compose.yml: A Docker Compose file to orchestrate the backend API service and a standard Node.js service for the Makerkit frontend. It should manage networking and environment variables for local development.
+7) Documentation & Deliverables
+backend/README.md: Must contain clear instructions to build, run, and test the backend service. Include OpenAPI/Swagger documentation links and example curl commands.
+frontend/README.md: A basic README explaining that this directory is for the Makerkit UI and how it connects to the backend service.
+model_card.yaml & dataset_card.yaml: Populate these files with details about the model architecture, performance, and the dataset used.
+Demo Notebook (notebooks/demo.ipynb): A short notebook demonstrating direct interaction with the Python backend's core functions.
+Final Deliverables: A full Git repository, a docker-compose.yml for running the full stack, and populated CHANGELOG.md and DEVELOPMENT_REGISTER.json files.
+8) Quality & Acceptance Criteria
+Functional
+All four XAI methods are implemented and unit-tested in the backend.
+Uncertainty and calibration methods are implemented and tested.
+FastAPI endpoints are fully functional, documented, and covered by integration tests.
+The API provides all necessary data for the specified UI features.
+MLflow and DVC are correctly integrated.
+Non-Functional
+Test Coverage: >90% for the backend/core/ package and backend/api/ routes.
+Code Quality: Adheres to PEP8, includes type hints, and has clear docstrings.
+Security: API is secured, requires auth tokens, and validates all inputs.
+Inference Latency: <200ms for a single image on a standard CPU (document benchmarks).
+9) Copilot Execution Plan & Rules
+A. Step-by-Step Execution
+Initialize the repo structure (backend/, frontend/, docker-compose.yml) and create baseline CHANGELOG.md and DEVELOPMENT_REGISTER.json for version 0.1.0.
+Implement a minimal detection model and unit tests in backend/core/.
+Implement the XAI, uncertainty, and calibration methods with tests.
+Develop the FastAPI endpoints, schemas, and API tests. This defines the contract for the frontend.
+Integrate MLflow and DVC into the backend/scripts/.
+Set up the CI workflow and pre-commit hooks for the backend.
+Finalize the backend Dockerfile, docker-compose.yml, and all documentation.
+B. Commit & Branching Rules
+Use feature branches: feat/<description> or fix/<description>.
+Update CHANGELOG.md and DEVELOPMENT_REGISTER.json before every commit.
+Use structured commit messages: feat(api): add explain endpoint — closes #issue-number.
+C. Failure & Fallback Guidance
+If a complex algorithm is not feasible, implement a simpler, fully-tested substitute and document this limitation and the reason in CHANGELOG.md and DEVELOPMENT_REGISTER.json.
+Use a TODO section in CHANGELOG.md to list any deferred features.
+Final Note: This prompt is your single source of truth for the backend service. Your goal is to create a secure, reliable, and well-documented API that the Makerkit frontend team can build upon. Follow it strictly.

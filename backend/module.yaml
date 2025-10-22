@@ -1,0 +1,52 @@
+name: xai-quality-control
+version: 1.0.0
+description: Production-Grade XAI Visual Quality Control Module for Radiographic and Standard Vision Images
+author: RadiKal Team
+license: MIT
+status: production_ready
+
+hardware:
+  training_gpu: NVIDIA RTX 4050 (6GB VRAM)
+  cuda_version: "11.8+"
+  recommended_ram: 16GB
+  storage: 50GB+
+
+makerkit_required: true
+makerkit_version: ">=1.0.0"
+
+python_version: ">=3.10"
+
+features:
+  - defect_detection
+  - defect_segmentation
+  - xai_explanations
+  - uncertainty_quantification
+  - model_calibration
+  - mlflow_tracking
+  - dvc_versioning
+
+xai_methods:
+  - gradcam
+  - shap
+  - lime
+  - integrated_gradients
+
+api_endpoints:
+  - POST /api/xai-qc/detect
+  - POST /api/xai-qc/explain
+  - GET /api/xai-qc/metrics
+  - POST /api/xai-qc/export
+  - GET /api/xai-qc/calibration
+  - GET /api/xai-qc/health
+
+authentication:
+  type: jwt
+  provider: makerkit
+  roles:
+    - operator
+    - admin
+
+deployment:
+  containerized: true
+  orchestration: docker-compose
+  ci_cd: github_actions

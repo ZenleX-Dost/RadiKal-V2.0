@@ -1,0 +1,69 @@
+stages:
+  preprocess:
+    cmd: python scripts/preprocess_data.py
+    deps:
+      - data/raw
+      - scripts/preprocess_data.py
+    params:
+      - train_config.json:image_size
+      - train_config.json:augmentation
+    outs:
+      - data/train
+      - data/val
+      - data/test
+
+  train:
+    cmd: python scripts/train.py --config configs/train_config.json
+    deps:
+      - data/train
+      - data/val
+      - scripts/train.py
+      - core/models/detector.py
+    params:
+      - train_config.json:num_epochs
+      - train_config.json:batch_size
+      - train_config.json:learning_rate
+      - train_config.json:num_classes
+    outs:
+      - models/checkpoints/best_model.pth
+    metrics:
+      - metrics/train_metrics.json:
+          cache: false
+
+  evaluate:
+    cmd: python scripts/evaluate.py --model models/checkpoints/best_model.pth
+    deps:
+      - data/test
+      - models/checkpoints/best_model.pth
+      - scripts/evaluate.py
+    outs:
+      - metrics/evaluation_results.json
+    metrics:
+      - metrics/evaluation_results.json:
+          cache: false
+    plots:
+      - metrics/confusion_matrix.png
+      - metrics/pr_curve.png
+
+  calibrate:
+    cmd: python scripts/calibrate_model.py
+    deps:
+      - models/checkpoints/best_model.pth
+      - data/val
+    params:
+      - train_config.json:num_classes
+    outs:
+      - models/calibrated_model.pth
+    metrics:
+      - metrics/calibration_metrics.json:
+          cache: false
+
+plots:
+  - metrics/training_loss.csv:
+      template: linear
+      x: epoch
+      y: loss
+  - metrics/validation_map.csv:
+      template: linear
+      x: epoch
+      y: mAP
