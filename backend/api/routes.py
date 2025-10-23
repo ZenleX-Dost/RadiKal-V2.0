@@ -73,7 +73,9 @@ xai_explainers: dict = {}
 
 # Configuration
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-YOLO_MODEL_PATH = Path("models/yolo/radikal_weld_detection/weights/best.pt")
+# Updated to use proper CLASSIFICATION model (not detection)
+YOLO_MODEL_PATH = Path("models/yolo/classification_defect_focused/weights/best.pt")
+MODEL_PATH_OLD_DETECTION = Path("models/yolo/radikal_weld_detection/weights/best.pt")  # Old detection model (deprecated)
 MODEL_PATH = Path("models/checkpoints/best_model.pth")  # Legacy path
 EXPORTS_DIR = Path("exports")
 EXPORTS_DIR.mkdir(exist_ok=True)

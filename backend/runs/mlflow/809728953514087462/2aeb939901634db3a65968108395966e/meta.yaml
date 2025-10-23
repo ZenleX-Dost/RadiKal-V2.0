@@ -1,0 +1,14 @@
+artifact_uri: file:///C:/Users/Amine EL-Hend/Documents/GitHub/RadiKal/backend/runs/mlflow/809728953514087462/2aeb939901634db3a65968108395966e/artifacts
+end_time: 1761164889789
+entry_point_name: ''
+experiment_id: '809728953514087462'
+lifecycle_stage: active
+run_id: 2aeb939901634db3a65968108395966e
+run_name: classification_defect_focused
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1761164165647
+status: 3
+tags: []
+user_id: Amine EL-Hend
