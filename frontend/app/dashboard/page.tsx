@@ -64,28 +64,21 @@ export default function DashboardPage() {
         message: `Found ${detection.detections.length} defect(s)`,
       });
 
-      // Step 2: Get explanations for first detection
-      if (detection.detections.length > 0) {
-        const firstDetection = detection.detections[0];
-        const reader2 = new FileReader();
-        reader2.onload = async () => {
-          const imageBase64 = (reader2.result as string).split(',')[1];
-          
-          const explanation = await apiClient.getExplanations({
-            image_id: detection.image_id,
-            detection_id: firstDetection.detection_id,
-            image_base64: imageBase64,
-            target_class: 0, // Assuming class 0
-          });
-          
-          setExplanationResult(explanation);
+      // Step 2: Get explanations (classification already includes them)
+      // The detection response now includes classification metadata
+      if ((detection as any)._classification_metadata) {
+        // Use the stored file to get full explanation with heatmaps
+        const explanation = await apiClient.getExplanations({
+          image_id: detection.image_id,
+          file: file, // Pass file directly
+        });
+        
+        setExplanationResult(explanation);
 
-          // Auto-save to history if enabled
-          if (settings.autoSaveAnalyses) {
-            saveToHistory(file.name, reader.result as string, detection, explanation);
-          }
-        };
-        reader2.readAsDataURL(file);
+        // Auto-save to history if enabled
+        if (settings.autoSaveAnalyses && uploadedImage) {
+          saveToHistory(file.name, uploadedImage, detection, explanation);
+        }
       } else if (settings.autoSaveAnalyses && uploadedImage) {
         saveToHistory(file.name, uploadedImage, detection);
       }
@@ -331,11 +324,17 @@ export default function DashboardPage() {
               <div>
                 <h2 className="text-2xl font-bold text-gray-900 dark:text-white flex items-center gap-3">
                   <Target className="w-8 h-8 text-blue-600 dark:text-blue-400" />
-                  Detection Results
+                  Classification Results
                 </h2>
                 <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-                  YOLOv8s Model • {detectionResult.detections.length} detection{detectionResult.detections.length !== 1 ? 's' : ''} found
+                  YOLOv8-cls Model • Whole-image classification{detectionResult.detections.length > 0 ? ' • Defect detected' : ' • No defect detected'}
                 </p>
+                {(detectionResult as any)._classification_metadata && (
+                  <div className="mt-2 inline-flex items-center px-3 py-1 bg-blue-100 dark:bg-blue-900/30 text-blue-800 dark:text-blue-200 text-xs font-medium rounded-full">
+                    <Info className="w-3 h-3 mr-1" />
+                    Using classification mode: classifies entire image, not individual defect regions
+                  </div>
+                )}
               </div>
               <div className="flex space-x-3">
                 <div className="px-4 py-2 bg-blue-100 dark:bg-blue-900/30 rounded-lg">
@@ -426,8 +425,8 @@ export default function DashboardPage() {
               </div>
             </div>
             <XAIExplanations
-              explanations={explanationResult.explanations}
-              consensusScore={explanationResult.consensus_score}
+              explanation={explanationResult}
+              originalImage={uploadedImage || undefined}
             />
           </div>
         )}

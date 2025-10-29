@@ -45,12 +45,42 @@ export interface ExplanationHeatmap {
   confidence_score: number;
 }
 
+export interface DefectRegion {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  coverage: number;
+  intensity: number;
+}
+
+export interface PredictionInfo {
+  predicted_class: number;
+  predicted_class_name: string;
+  predicted_class_full_name: string;
+  confidence: number;
+  severity: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' | 'ACCEPTABLE';
+  color: [number, number, number];
+}
+
+export interface ExplanationMetadata {
+  prediction: PredictionInfo;
+  probabilities: Record<string, number>;
+  regions: DefectRegion[];
+  location_description: string;
+  description: string;
+  recommendation: string;
+}
+
 export interface ExplanationResponse {
   image_id: string;
-  detection_id: string;
+  detection_id?: string;
   explanations: ExplanationHeatmap[];
+  aggregated_heatmap: string;
   consensus_score: number;
+  computation_time_ms: number;
   timestamp: string;
+  metadata?: ExplanationMetadata;
 }
 
 // Nested metrics types matching backend schemas

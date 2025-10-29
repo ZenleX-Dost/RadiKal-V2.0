@@ -47,12 +47,12 @@ from core.models.detector import DefectDetector
 from core.models.yolo_detector import YOLODefectDetector
 from core.preprocessing.image_processor import ImageProcessor
 from db import get_db, Analysis, Detection, Explanation
-# Temporarily disabled XAI imports due to SHAP/scipy import issues
-# from core.xai.gradcam import GradCAM
+# XAI imports - Now with real Grad-CAM for YOLOv8 Classification!
+from core.xai.classification_explainer import ClassificationExplainer
+from core.models.yolo_classifier import YOLOClassifier
+# Temporarily disabled SHAP/LIME due to scipy import issues
 # from core.xai.shap_explainer import SHAPExplainer
 # from core.xai.lime_explainer import LIMEExplainer
-# from core.xai.integrated_gradients import IntegratedGradientsExplainer
-# from core.xai.aggregator import XAIAggregator
 # from core.uncertainty.mc_dropout import MCDropoutEstimator
 # from core.uncertainty.calibration import calculate_ece, TemperatureScaling
 # from core.metrics.business_metrics import calculate_confusion_matrix_metrics
@@ -66,6 +66,8 @@ router = APIRouter(prefix="/api/xai-qc", tags=["XAI Quality Control"])
 
 # Global model instances (will be loaded on startup)
 model: Optional[YOLODefectDetector] = None  # Using YOLOv8 now!
+classifier: Optional[YOLOClassifier] = None  # NEW: YOLOv8 Classification model
+explainer: Optional[ClassificationExplainer] = None  # NEW: Real XAI explainer
 image_processor: Optional[ImageProcessor] = None
 xai_explainers: dict = {}
 # mc_dropout: Optional[MCDropoutEstimator] = None  # Disabled temporarily
@@ -103,9 +105,23 @@ def initialize_models():
     
     This function should be called during FastAPI app initialization.
     """
-    global model, image_processor, xai_explainers  # , mc_dropout, temperature_scaler
+    global model, classifier, explainer, image_processor, xai_explainers  # , mc_dropout, temperature_scaler
     
     logger.info(f"Initializing models on device: {DEVICE}")
+    
+    # Initialize YOLOv8 Classification Model + Explainer
+    try:
+        classifier = YOLOClassifier(
+            model_path=str(YOLO_MODEL_PATH),
+            device='0' if DEVICE == 'cuda' else 'cpu',
+            nd_confidence_threshold=0.7
+        )
+        explainer = ClassificationExplainer(classifier)
+        logger.info(f"✅ Loaded YOLOv8 Classification model from {YOLO_MODEL_PATH}")
+        logger.info(f"✅ Initialized ClassificationExplainer with Grad-CAM")
+    except FileNotFoundError as e:
+        logger.error(f"❌ YOLOv8 classification model not found: {e}")
+        logger.warning("⚠️  XAI features will be limited")
     
     # Initialize YOLOv8 detector
     try:
@@ -321,100 +337,110 @@ async def detect_defects(
 
 @router.post("/explain", response_model=ExplainResponse)
 async def explain_detection(
-    request: ExplainRequest,
+    file: UploadFile = File(...),
     # # Auth disabled,  # Auth disabled for now
 ):
     """
-    Generate XAI explanations for a detected defect.
+    Generate XAI explanations for a radiographic weld image using Grad-CAM.
     
-    **NOTE: XAI functionality temporarily disabled due to dependency issues.**
-    **This endpoint returns a placeholder response.**
+    **✅ REAL XAI ENABLED**: Uses actual Grad-CAM on YOLOv8 classification model!
+    
+    Features:
+    - Grad-CAM heatmap showing defect localization
+    - Class probabilities for all defect types
+    - Detected defect regions with bounding boxes  
+    - Natural language description of findings
+    - Operator-friendly recommendations
     
     Args:
-        request: ExplainRequest with image data and detection info
+        file: Uploaded radiographic image (JPEG, PNG)
         
     Returns:
-        ExplainResponse with placeholder explanation
+        ExplainResponse with heatmaps, descriptions, and recommendations
         
     Raises:
         HTTPException: If explanation generation fails
     """
     try:
-        # XAI explainers temporarily disabled - return mock heatmap
-        logger.warning("XAI explainers disabled - returning mock visualization")
+        if explainer is None:
+            raise HTTPException(
+                status_code=503,
+                detail="XAI explainer not initialized. Ensure classification model is loaded."
+            )
         
-        # Create realistic-looking mock heatmaps for each method
-        height, width = 640, 640
-        
-        # Grad-CAM style: Gaussian blob at detection location
-        gradcam_heatmap = np.zeros((height, width), dtype=np.float32)
-        center_x, center_y = width // 2, height // 2
-        y, x = np.ogrid[:height, :width]
-        mask = ((x - center_x)**2 + (y - center_y)**2) <= 15000
-        gradcam_heatmap[mask] = 255
-        gradcam_heatmap = cv2.GaussianBlur(gradcam_heatmap, (51, 51), 0)
-        gradcam_heatmap = (gradcam_heatmap / gradcam_heatmap.max() * 255).astype(np.uint8)
-        
-        # LIME style: Superpixel-based
-        lime_heatmap = np.random.randint(50, 200, (height, width), dtype=np.uint8)
-        lime_heatmap = cv2.GaussianBlur(lime_heatmap, (31, 31), 0)
-        
-        # SHAP style: Similar to Grad-CAM but slightly different
-        shap_heatmap = np.zeros((height, width), dtype=np.float32)
-        shap_heatmap[mask] = 200
-        shap_heatmap = cv2.GaussianBlur(shap_heatmap, (41, 41), 0)
-        shap_heatmap = (shap_heatmap / shap_heatmap.max() * 255).astype(np.uint8)
-        
-        # Integrated Gradients style
-        ig_heatmap = np.random.randint(30, 180, (height, width), dtype=np.uint8)
-        ig_heatmap[mask] = 255
-        ig_heatmap = cv2.GaussianBlur(ig_heatmap, (25, 25), 0)
-        
-        explanations = [
-            ExplanationResult(
+        # Save uploaded file temporarily
+        temp_path = EXPORTS_DIR / f"temp_{uuid.uuid4()}.jpg"
+        try:
+            image_bytes = await file.read()
+            image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+            image.save(temp_path)
+            
+            logger.info(f"Processing image for XAI explanation: {file.filename}")
+            
+            # Generate complete explanation
+            explanation_result = explainer.explain_prediction(
+                str(temp_path),
+                include_overlay=True,
+                include_regions=True,
+                include_description=True
+            )
+            
+            # Build response
+            # Primary Grad-CAM heatmap
+            gradcam_explanation = ExplanationResult(
                 method="gradcam",
-                heatmap_base64=numpy_to_base64(gradcam_heatmap),
-                confidence_score=0.85,
-            ),
-            ExplanationResult(
-                method="lime",
-                heatmap_base64=numpy_to_base64(lime_heatmap),
-                confidence_score=0.78,
-            ),
-            ExplanationResult(
-                method="shap",
-                heatmap_base64=numpy_to_base64(shap_heatmap),
-                confidence_score=0.82,
-            ),
-            ExplanationResult(
-                method="integrated_gradients",
-                heatmap_base64=numpy_to_base64(ig_heatmap),
-                confidence_score=0.80,
-            ),
-        ]
+                heatmap_base64=explanation_result['heatmap_base64'],
+                confidence_score=explanation_result['prediction']['confidence']
+            )
+            
+            # Also include overlay as a separate "method"
+            overlay_explanation = ExplanationResult(
+                method="overlay",
+                heatmap_base64=explanation_result['overlay_base64'],
+                confidence_score=explanation_result['prediction']['confidence']
+            )
+            
+            # Calculate consensus score (for now, use prediction confidence)
+            consensus_score = explanation_result['prediction']['confidence']
+            
+            # Aggregated heatmap (use Grad-CAM as primary)
+            aggregated_heatmap = explanation_result['heatmap_base64']
+            
+            response = ExplainResponse(
+                image_id=str(uuid.uuid4()),
+                explanations=[gradcam_explanation, overlay_explanation],
+                aggregated_heatmap=aggregated_heatmap,
+                consensus_score=consensus_score,
+                computation_time_ms=50.0,  # Approximate
+                timestamp=datetime.now(),
+                metadata={
+                    'prediction': explanation_result['prediction'],
+                    'probabilities': explanation_result['probabilities'],
+                    'regions': explanation_result['regions'],
+                    'location_description': explanation_result['location_description'],
+                    'description': explanation_result['description'],
+                    'recommendation': explanation_result['recommendation']
+                }
+            )
+            
+            logger.info(f"✅ Generated XAI explanation: {explanation_result['prediction']['class_full_name']} "
+                       f"({explanation_result['prediction']['confidence']*100:.1f}% confidence)")
+            logger.info(f"   Location: {explanation_result['location_description']}")
+            logger.info(f"   Regions detected: {len(explanation_result['regions'])}")
+            
+            return response
         
-        # Aggregated heatmap (average of all methods)
-        aggregated = (gradcam_heatmap.astype(np.float32) + 
-                     lime_heatmap.astype(np.float32) + 
-                     shap_heatmap.astype(np.float32) + 
-                     ig_heatmap.astype(np.float32)) / 4
-        aggregated = aggregated.astype(np.uint8)
-        
-        response = ExplainResponse(
-            image_id=request.image_id,
-            explanations=explanations,
-            aggregated_heatmap=numpy_to_base64(aggregated),
-            consensus_score=0.81,  # Average of all methods
-            computation_time_ms=45.2,
-            timestamp=datetime.now(),
-        )
-        
-        logger.info(f"Mock XAI explanations generated for {request.image_id}")
-        return response
-        
+        finally:
+            # Clean up temp file
+            if temp_path.exists():
+                temp_path.unlink()
+    
     except Exception as e:
-        logger.error(f"Explanation generation failed: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Explanation failed: {str(e)}")
+        logger.error(f"Failed to generate explanation: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Explanation generation failed: {str(e)}"
+        )
 
 
 @router.get("/history", response_model=AnalysisHistoryResponse)

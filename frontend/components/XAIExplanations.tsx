@@ -1,117 +1,127 @@
 'use client';
 
 /**
- * Component to display XAI explanations with heatmaps.
+ * Component to display XAI explanations with enhanced defect localization.
+ * Now includes operator-friendly messaging and interactive visualization.
  */
 
-import { ExplanationHeatmap } from '@/types';
+import { ExplanationResponse } from '@/types';
 import { useState } from 'react';
+import DefectLocalizationView from './DefectLocalizationView';
+import { 
+  DefectBadge, 
+  SeverityIndicator, 
+  ActionRecommendation,
+  DefectSummaryCard 
+} from './OperatorMessaging';
 
 interface XAIExplanationsProps {
-  explanations: ExplanationHeatmap[];
-  consensusScore: number;
+  explanation: ExplanationResponse;
+  originalImage?: string;
 }
 
 export default function XAIExplanations({
-  explanations,
-  consensusScore,
+  explanation,
+  originalImage,
 }: XAIExplanationsProps) {
-  const [selectedMethod, setSelectedMethod] = useState<string>(
-    explanations[0]?.method || ''
-  );
+  const [showAdvanced, setShowAdvanced] = useState(false);
 
-  const selectedExplanation = explanations.find(
-    (exp) => exp.method === selectedMethod
-  );
+  if (!explanation.metadata) {
+    // Fallback for old-style explanations without metadata
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <h3 className="text-lg font-semibold">XAI Explanations</h3>
+          <div className="px-4 py-2 bg-green-100 border border-green-300 rounded-lg">
+            <p className="text-sm text-green-900">
+              <strong>Consensus Score:</strong> {(explanation.consensus_score * 100).toFixed(1)}%
+            </p>
+          </div>
+        </div>
+
+        {/* Simple heatmap display */}
+        <div className="border-2 border-gray-300 rounded-lg overflow-hidden">
+          <img
+            src={`data:image/png;base64,${explanation.aggregated_heatmap}`}
+            alt="Heatmap"
+            className="w-full h-auto"
+          />
+        </div>
+      </div>
+    );
+  }
+
+  const { prediction, location_description, recommendation, regions } = explanation.metadata;
 
   return (
     <div className="space-y-6">
+      {/* Header with badge */}
       <div className="flex items-center justify-between">
-        <h3 className="text-lg font-semibold">XAI Explanations</h3>
-        <div className="px-4 py-2 bg-green-100 border border-green-300 rounded-lg">
-          <p className="text-sm text-green-900">
-            <strong>Consensus Score:</strong> {(consensusScore * 100).toFixed(1)}%
-          </p>
-        </div>
+        <h3 className="text-2xl font-bold text-gray-900">Defect Analysis Results</h3>
+        <DefectBadge prediction={prediction} size="lg" />
       </div>
 
-      {/* Method selector */}
-      <div className="flex flex-wrap gap-2">
-        {explanations.map((exp) => (
-          <button
-            key={exp.method}
-            onClick={() => setSelectedMethod(exp.method)}
-            className={`
-              px-4 py-2 rounded-lg font-medium transition-colors
-              ${
-                selectedMethod === exp.method
-                  ? 'bg-blue-600 text-white'
-                  : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
-              }
-            `}
-          >
-            {exp.method.toUpperCase()}
-            <span className="ml-2 text-xs opacity-75">
-              ({(exp.confidence_score * 100).toFixed(0)}%)
-            </span>
-          </button>
-        ))}
+      {/* Summary card */}
+      <DefectSummaryCard
+        prediction={prediction}
+        locationDescription={location_description}
+        numRegions={regions?.length || 0}
+      />
+
+      {/* Main visualization */}
+      <div className="bg-white border-2 border-gray-200 rounded-xl p-6 shadow-md">
+        <h4 className="text-lg font-semibold text-gray-900 mb-4">Visual Analysis</h4>
+        <DefectLocalizationView
+          explanation={explanation}
+          originalImage={originalImage}
+        />
       </div>
 
-      {/* Selected heatmap */}
-      {selectedExplanation && (
-        <div className="space-y-3">
-          <div className="border-2 border-gray-300 rounded-lg overflow-hidden">
-            <img
-              src={`data:image/png;base64,${selectedExplanation.heatmap_base64}`}
-              alt={`${selectedMethod} heatmap`}
-              className="w-full h-auto"
-            />
-          </div>
-          <div className="p-4 bg-gray-50 border border-gray-200 rounded-lg">
-            <p className="text-sm text-gray-700">
-              <strong>Method:</strong> {selectedMethod.toUpperCase()}
-            </p>
-            <p className="text-sm text-gray-700">
-              <strong>Confidence:</strong>{' '}
-              {(selectedExplanation.confidence_score * 100).toFixed(2)}%
-            </p>
-            <p className="text-xs text-gray-600 mt-2">
-              {getMethodDescription(selectedMethod)}
-            </p>
-          </div>
-        </div>
-      )}
+      {/* Action recommendation */}
+      <ActionRecommendation
+        prediction={prediction}
+        recommendation={recommendation}
+      />
 
-      {/* Comparison grid */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        {explanations.map((exp) => (
-          <div
-            key={exp.method}
-            className="border border-gray-300 rounded-lg overflow-hidden cursor-pointer hover:border-blue-500 transition-colors"
-            onClick={() => setSelectedMethod(exp.method)}
-          >
-            <img
-              src={`data:image/png;base64,${exp.heatmap_base64}`}
-              alt={`${exp.method} thumbnail`}
-              className="w-full h-auto"
-            />
-            <div className="p-2 text-center bg-gray-50">
-              <p className="text-xs font-medium">{exp.method.toUpperCase()}</p>
+      {/* Advanced details toggle */}
+      <div>
+        <button
+          onClick={() => setShowAdvanced(!showAdvanced)}
+          className="text-blue-600 hover:text-blue-700 font-medium text-sm flex items-center space-x-1"
+        >
+          <span>{showAdvanced ? '▼' : '▶'}</span>
+          <span>{showAdvanced ? 'Hide' : 'Show'} Advanced Details</span>
+        </button>
+
+        {showAdvanced && (
+          <div className="mt-4 p-4 bg-gray-50 border border-gray-200 rounded-lg space-y-3">
+            <div className="grid grid-cols-2 gap-4 text-sm">
+              <div>
+                <p className="font-semibold text-gray-700">Model Confidence</p>
+                <p className="text-gray-600">{(prediction.confidence * 100).toFixed(2)}%</p>
+              </div>
+              <div>
+                <p className="font-semibold text-gray-700">Consensus Score</p>
+                <p className="text-gray-600">{(explanation.consensus_score * 100).toFixed(2)}%</p>
+              </div>
+              <div>
+                <p className="font-semibold text-gray-700">Computation Time</p>
+                <p className="text-gray-600">{explanation.computation_time_ms.toFixed(1)} ms</p>
+              </div>
+              <div>
+                <p className="font-semibold text-gray-700">Analysis ID</p>
+                <p className="text-gray-600 text-xs truncate">{explanation.image_id}</p>
+              </div>
+            </div>
+
+            <div>
+              <p className="font-semibold text-gray-700 text-sm mb-2">Full Description</p>
+              <p className="text-gray-600 text-sm">{explanation.metadata.description}</p>
             </div>
           </div>
-        ))}
+        )}
       </div>
     </div>
   );
 }
 
-function getMethodDescription(method: string): string {
-  const descriptions: Record<string, string> = {
-    'grad-cam': 'Visualizes which regions of the image the model focuses on using gradient-weighted class activation mapping.',
-    'shap': 'Uses Shapley values to explain the contribution of each pixel to the model\'s prediction.',
-    'lime': 'Generates local explanations by perturbing the input image and observing prediction changes.',
-    'integrated-gradients': 'Computes the gradient of the output with respect to the input along a path from a baseline.',
-  };
-  return descriptions[method] || 'AI explainability method visualization.';
-}

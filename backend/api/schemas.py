@@ -68,6 +68,7 @@ class ExplainResponse(BaseModel):
     consensus_score: float = Field(..., ge=0.0, le=1.0)
     computation_time_ms: float
     timestamp: datetime = Field(default_factory=datetime.utcnow)
+    metadata: Optional[dict] = None  # Classification metadata including prediction details
 
 
 class MetricsRequest(BaseModel):
