@@ -126,9 +126,21 @@ class ClassificationExplainer:
         regions = []
         location_desc = ""
         if include_regions:
-            regions = self.gradcam.find_defect_regions(heatmap, threshold=0.5, min_area=50)
-            if regions:
-                location_desc = self.gradcam.describe_defect_location(regions, heatmap.shape)
+            raw_regions = self.gradcam.find_defect_regions(heatmap, threshold=0.5, min_area=50)
+            # Transform regions to frontend format
+            regions = [
+                {
+                    'x': r['bbox'][0],
+                    'y': r['bbox'][1],
+                    'width': r['bbox'][2],
+                    'height': r['bbox'][3],
+                    'coverage': r['area'] / (heatmap.shape[0] * heatmap.shape[1]),  # Normalized coverage
+                    'intensity': r['score']  # Average activation score
+                }
+                for r in raw_regions
+            ]
+            if raw_regions:
+                location_desc = self.gradcam.describe_defect_location(raw_regions, heatmap.shape)
         
         # Generate description
         description = ""
