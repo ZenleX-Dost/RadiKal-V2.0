@@ -223,3 +223,52 @@ class AnalysisHistoryResponse(BaseModel):
     page: int
     page_size: int
     has_more: bool
+
+
+# ===== Analytics Schemas =====
+
+class DefectTrendData(BaseModel):
+    """Defect trend data point."""
+    period: str  # Date or time period label
+    total_inspections: int
+    defect_count: int
+    defect_rate: float
+    avg_confidence: float
+    defect_types: Dict[str, int] = Field(default_factory=dict)
+
+
+class TrendAnalysisResponse(BaseModel):
+    """Response for trend analysis endpoint."""
+    trends: List[DefectTrendData]
+    summary: Dict[str, Any] = Field(default_factory=dict)
+    date_range: Dict[str, Optional[datetime]]
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+
+
+class ComparativeAnalysis(BaseModel):
+    """Comparative analysis between periods."""
+    period1: Dict[str, Any]
+    period2: Dict[str, Any]
+    changes: Dict[str, float]  # Percentage changes
+    significant_changes: List[str]
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+
+
+class OperatorPerformance(BaseModel):
+    """Operator performance metrics."""
+    operator_id: str
+    total_analyses: int
+    avg_processing_time: float
+    accuracy_score: float
+    defect_detection_rate: float
+    false_positive_rate: float
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+
+
+class ProjectQualityScore(BaseModel):
+    """Project quality score metrics."""
+    project_id: str
+    quality_score: float
+    defect_density: float
+    trend: str  # 'improving', 'stable', 'declining'
+    timestamp: datetime = Field(default_factory=datetime.utcnow)

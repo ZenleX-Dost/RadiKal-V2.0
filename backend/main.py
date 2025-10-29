@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
 from api.routes import router, initialize_models
+from api import analytics_routes, review_routes, compliance_routes
 from db import init_db
 
 # Create FastAPI app
@@ -34,6 +35,9 @@ app.add_middleware(
 
 # Include routers
 app.include_router(router)
+app.include_router(analytics_routes.router)
+app.include_router(review_routes.router)
+app.include_router(compliance_routes.router)
 
 # Startup event: Initialize models and database
 @app.on_event("startup")
