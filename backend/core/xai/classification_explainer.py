@@ -18,6 +18,10 @@ from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont
 
 from core.xai.grad_cam_classifier import YOLOv8ClassifierGradCAM
+from core.xai.lime_explainer import LIMEExplainer
+from core.xai.shap_explainer import SHAPExplainer
+from core.xai.integrated_gradients import IntegratedGradientsExplainer
+from core.xai.aggregator import XAIAggregator, AggregationMethod
 from core.models.yolo_classifier import YOLOClassifier
 
 logger = logging.getLogger(__name__)
@@ -69,7 +73,48 @@ class ClassificationExplainer:
         """
         self.classifier = classifier
         self.gradcam = YOLOv8ClassifierGradCAM(classifier.model)
-        logger.info("ClassificationExplainer initialized with Grad-CAM")
+        
+        # Initialize additional XAI methods (lazy loading to save memory)
+        self._lime = None
+        self._shap = None
+        self._ig = None
+        self._aggregator = XAIAggregator(method=AggregationMethod.MEAN)
+        
+        logger.info("ClassificationExplainer initialized with Grad-CAM (LIME/SHAP/IG available)")
+    
+    @property
+    def lime(self) -> LIMEExplainer:
+        """Lazy load LIME explainer."""
+        if self._lime is None:
+            logger.info("Initializing LIME explainer...")
+            self._lime = LIMEExplainer(
+                self.classifier.model,
+                num_samples=500,  # Lower for faster inference
+                num_features=10
+            )
+        return self._lime
+    
+    @property
+    def shap_explainer(self) -> SHAPExplainer:
+        """Lazy load SHAP explainer."""
+        if self._shap is None:
+            logger.info("Initializing SHAP explainer...")
+            self._shap = SHAPExplainer(
+                self.classifier.model,
+                num_background=20  # Lower for faster inference
+            )
+        return self._shap
+    
+    @property
+    def ig_explainer(self) -> IntegratedGradientsExplainer:
+        """Lazy load Integrated Gradients explainer."""
+        if self._ig is None:
+            logger.info("Initializing Integrated Gradients explainer...")
+            self._ig = IntegratedGradientsExplainer(
+                self.classifier.model,
+                n_steps=50
+            )
+        return self._ig
     
     def explain_prediction(
         self,
@@ -210,6 +255,187 @@ class ClassificationExplainer:
                 logger.error(f"Failed to generate heatmap for class {class_id}: {e}")
         
         return heatmaps
+    
+    def explain_with_methods(
+        self,
+        image_path: str,
+        methods: List[str] = None,
+        include_aggregated: bool = True
+    ) -> Dict[str, Any]:
+        """
+        Generate explanations using multiple XAI methods.
+        
+        Args:
+            image_path: Path to radiographic image
+            methods: List of methods to use ('gradcam', 'lime', 'shap', 'ig', 'all')
+                    If None or 'all', uses all available methods
+            include_aggregated: Whether to include aggregated consensus heatmap
+            
+        Returns:
+            Dict with method-specific explanations and optional aggregated result
+        """
+        if methods is None or 'all' in methods:
+            methods = ['gradcam', 'lime', 'shap', 'ig']
+        
+        logger.info(f"Generating multi-method explanations: {methods}")
+        
+        # Load image
+        original_image = cv2.imread(str(image_path))
+        if original_image is None:
+            raise ValueError(f"Failed to load image: {image_path}")
+        
+        # Get prediction first
+        pred_result = self.classifier.classify(image_path)
+        target_class = pred_result['predicted_class']
+        
+        results = {
+            'prediction': {
+                'class_id': pred_result['predicted_class'],
+                'class_code': pred_result['predicted_class_name'],
+                'class_full_name': pred_result['predicted_class_full_name'],
+                'confidence': pred_result['confidence'],
+                'is_defect': pred_result['is_defect'],
+                'severity': self.CLASS_INFO[pred_result['predicted_class']]['severity']
+            },
+            'probabilities': [
+                {
+                    'class_id': i,
+                    'class_code': self.classifier.CLASS_NAMES[i],
+                    'class_name': self.CLASS_INFO[i]['name'],
+                    'probability': float(pred_result['all_probabilities'][self.classifier.CLASS_NAMES[i]]),
+                }
+                for i in range(4)
+            ],
+            'methods': {}
+        }
+        
+        heatmaps_for_aggregation = {}
+        
+        # Generate Grad-CAM
+        if 'gradcam' in methods:
+            try:
+                logger.info("Generating Grad-CAM...")
+                heatmap, cam_info = self.gradcam.generate_heatmap(image_path, target_class=target_class)
+                overlay = self.gradcam.generate_overlay(original_image, heatmap, alpha=0.4)
+                
+                results['methods']['gradcam'] = {
+                    'heatmap_base64': self._heatmap_to_base64(heatmap),
+                    'overlay_base64': self._image_to_base64(overlay),
+                    'confidence_score': float(pred_result['confidence']),
+                    'metadata': cam_info
+                }
+                heatmaps_for_aggregation['gradcam'] = heatmap
+                
+            except Exception as e:
+                logger.error(f"Grad-CAM failed: {e}")
+                results['methods']['gradcam'] = {'error': str(e)}
+        
+        # Generate LIME
+        if 'lime' in methods:
+            try:
+                logger.info("Generating LIME explanation...")
+                lime_overlay, lime_metadata = self.lime.explain(
+                    original_image,
+                    target_class=target_class,
+                    num_samples=300,  # Faster inference
+                    num_features=8
+                )
+                
+                results['methods']['lime'] = {
+                    'overlay_base64': self._image_to_base64(lime_overlay),
+                    'confidence_score': lime_metadata.get('explanation_score', 0.0),
+                    'metadata': lime_metadata
+                }
+                # Note: LIME doesn't produce a clean heatmap for aggregation
+                
+            except Exception as e:
+                logger.error(f"LIME failed: {e}")
+                results['methods']['lime'] = {'error': str(e)}
+        
+        # Generate SHAP
+        if 'shap' in methods:
+            try:
+                logger.info("Generating SHAP explanation...")
+                # SHAP requires tensor input
+                import torch
+                from torchvision import transforms
+                
+                transform = transforms.Compose([
+                    transforms.ToPILImage(),
+                    transforms.Resize((224, 224)),
+                    transforms.ToTensor()
+                ])
+                
+                img_rgb = cv2.cvtColor(original_image, cv2.COLOR_BGR2RGB)
+                img_tensor = transform(img_rgb).unsqueeze(0)
+                
+                shap_values = self.shap_explainer.explain(img_tensor, target_class=target_class)
+                shap_heatmap = self.shap_explainer.visualize(shap_values, img_tensor)
+                
+                # Convert to BGR for consistency
+                shap_heatmap_bgr = cv2.cvtColor(shap_heatmap, cv2.COLOR_RGB2BGR)
+                
+                results['methods']['shap'] = {
+                    'overlay_base64': self._image_to_base64(shap_heatmap_bgr),
+                    'confidence_score': float(pred_result['confidence']),
+                    'metadata': {'method': 'shap', 'target_class': target_class}
+                }
+                
+            except Exception as e:
+                logger.error(f"SHAP failed: {e}")
+                results['methods']['shap'] = {'error': str(e)}
+        
+        # Generate Integrated Gradients
+        if 'ig' in methods:
+            try:
+                logger.info("Generating Integrated Gradients...")
+                import torch
+                from torchvision import transforms
+                
+                transform = transforms.Compose([
+                    transforms.ToPILImage(),
+                    transforms.Resize((224, 224)),
+                    transforms.ToTensor()
+                ])
+                
+                img_rgb = cv2.cvtColor(original_image, cv2.COLOR_BGR2RGB)
+                img_tensor = transform(img_rgb).unsqueeze(0)
+                
+                ig_attributions = self.ig_explainer.explain(img_tensor, target_class=target_class)
+                ig_heatmap = self.ig_explainer.visualize(ig_attributions, img_tensor)
+                
+                # Convert to BGR
+                ig_heatmap_bgr = cv2.cvtColor(ig_heatmap, cv2.COLOR_RGB2BGR)
+                
+                results['methods']['ig'] = {
+                    'overlay_base64': self._image_to_base64(ig_heatmap_bgr),
+                    'confidence_score': float(pred_result['confidence']),
+                    'metadata': {'method': 'integrated_gradients', 'target_class': target_class}
+                }
+                
+            except Exception as e:
+                logger.error(f"Integrated Gradients failed: {e}")
+                results['methods']['ig'] = {'error': str(e)}
+        
+        # Aggregate heatmaps if requested and multiple methods succeeded
+        if include_aggregated and len(heatmaps_for_aggregation) > 1:
+            try:
+                logger.info(f"Aggregating {len(heatmaps_for_aggregation)} heatmaps...")
+                aggregated_heatmap = self._aggregator.aggregate(heatmaps_for_aggregation)
+                aggregated_overlay = self.gradcam.generate_overlay(original_image, aggregated_heatmap, alpha=0.4)
+                
+                results['aggregated'] = {
+                    'heatmap_base64': self._heatmap_to_base64(aggregated_heatmap),
+                    'overlay_base64': self._image_to_base64(aggregated_overlay),
+                    'consensus_score': float(pred_result['confidence']),
+                    'methods_used': list(heatmaps_for_aggregation.keys())
+                }
+                
+            except Exception as e:
+                logger.error(f"Aggregation failed: {e}")
+        
+        logger.info(f"Multi-method explanation complete. Methods: {list(results['methods'].keys())}")
+        return results
     
     def create_visualization_panel(
         self,

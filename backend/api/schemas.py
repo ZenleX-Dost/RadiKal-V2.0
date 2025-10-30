@@ -272,3 +272,221 @@ class ProjectQualityScore(BaseModel):
     defect_density: float
     trend: str  # 'improving', 'stable', 'declining'
     timestamp: datetime = Field(default_factory=datetime.utcnow)
+
+
+# ===== Custom Defect Types Schemas =====
+
+class CustomDefectTypeCreate(BaseModel):
+    """Schema for creating a new custom defect type."""
+    name: str = Field(..., min_length=1, max_length=100, description="Defect type name")
+    code: str = Field(..., min_length=1, max_length=10, description="Short code (e.g., 'WM' for weld mismatch)")
+    description: Optional[str] = Field(None, max_length=500)
+    severity_default: str = Field(default="MEDIUM", description="Default severity level")
+    expected_features: Optional[Dict[str, Any]] = Field(default_factory=dict)
+    color: str = Field(default="#FF6B6B", description="Hex color for UI visualization")
+    compliance_standards: Optional[List[str]] = Field(default_factory=list)
+    min_samples_required: int = Field(default=50, ge=1, description="Minimum samples for training")
+
+
+class CustomDefectTypeUpdate(BaseModel):
+    """Schema for updating a custom defect type."""
+    name: Optional[str] = Field(None, min_length=1, max_length=100)
+    description: Optional[str] = Field(None, max_length=500)
+    severity_default: Optional[str] = None
+    expected_features: Optional[Dict[str, Any]] = None
+    color: Optional[str] = None
+    is_active: Optional[bool] = None
+    compliance_standards: Optional[List[str]] = None
+    min_samples_required: Optional[int] = Field(None, ge=1)
+
+
+class CustomDefectTypeResponse(BaseModel):
+    """Response schema for custom defect type."""
+    id: int
+    name: str
+    code: str
+    description: Optional[str]
+    severity_default: str
+    expected_features: Optional[Dict[str, Any]]
+    color: str
+    is_active: bool
+    requires_retraining: bool
+    min_samples_required: int
+    current_sample_count: int
+    compliance_standards: Optional[List[str]]
+    created_at: datetime
+    created_by: str
+    updated_at: datetime
+    
+    class Config:
+        from_attributes = True
+
+
+class TrainingSampleCreate(BaseModel):
+    """Schema for creating a training sample."""
+    defect_type_id: int
+    image_path: str
+    image_id: Optional[str] = None
+    annotations: Dict[str, Any] = Field(..., description="Annotation data (bbox, class, etc.)")
+    annotation_format: str = Field(default="yolo", description="Annotation format")
+    source: str = Field(..., description="Source of the sample")
+    quality_score: float = Field(default=1.0, ge=0.0, le=1.0)
+    training_set: Optional[str] = Field(None, description="train/val/test")
+
+
+class TrainingSampleResponse(BaseModel):
+    """Response schema for training sample."""
+    id: int
+    defect_type_id: int
+    image_path: str
+    image_id: Optional[str]
+    annotations: Dict[str, Any]
+    annotation_format: str
+    source: str
+    quality_score: float
+    used_in_training: bool
+    training_set: Optional[str]
+    created_at: datetime
+    labeled_by: str
+    verified_by: Optional[str]
+    verified_at: Optional[datetime]
+    
+    class Config:
+        from_attributes = True
+
+
+class ModelVersionResponse(BaseModel):
+    """Response schema for model version."""
+    id: int
+    version_number: str
+    model_name: str
+    model_path: str
+    model_size_mb: Optional[float]
+    base_model: str
+    epochs_trained: Optional[int]
+    final_map50: Optional[float]
+    final_accuracy: Optional[float]
+    classes: List[str]
+    num_classes: int
+    custom_classes: Optional[List[str]]
+    is_active: bool
+    deployment_status: str
+    precision: Optional[float]
+    recall: Optional[float]
+    f1_score: Optional[float]
+    created_at: datetime
+    trained_by: str
+    deployed_at: Optional[datetime]
+    
+    class Config:
+        from_attributes = True
+
+
+class TrainingDatasetCreate(BaseModel):
+    """Schema for creating a training dataset."""
+    name: str = Field(..., min_length=1, max_length=200)
+    description: Optional[str] = Field(None, max_length=1000)
+    dataset_path: str
+    total_images: int = Field(..., ge=0)
+    train_images: int = Field(..., ge=0)
+    val_images: int = Field(..., ge=0)
+    test_images: int = Field(..., ge=0)
+    class_distribution: Dict[str, int] = Field(...)
+    includes_custom_types: bool = Field(default=False)
+    custom_types_included: Optional[List[int]] = Field(default_factory=list)
+    augmentation_config: Optional[Dict[str, Any]] = Field(default_factory=dict)
+
+
+class TrainingDatasetResponse(BaseModel):
+    """Response schema for training dataset."""
+    id: int
+    name: str
+    description: Optional[str]
+    dataset_path: str
+    total_images: int
+    train_images: int
+    val_images: int
+    test_images: int
+    class_distribution: Dict[str, int]
+    includes_custom_types: bool
+    custom_types_included: Optional[List[int]]
+    mean_annotation_quality: float
+    has_validation_errors: bool
+    created_at: datetime
+    created_by: str
+    
+    class Config:
+        from_attributes = True
+
+
+class TrainingJobCreate(BaseModel):
+    """Schema for creating a training job."""
+    model_version_id: int
+    job_type: str = Field(..., description="full_training, fine_tuning, transfer_learning")
+    hyperparameters: Dict[str, Any] = Field(...)
+    total_epochs: int = Field(..., ge=1)
+
+
+class TrainingJobResponse(BaseModel):
+    """Response schema for training job."""
+    id: int
+    model_version_id: int
+    job_type: str
+    status: str
+    progress_percent: float
+    current_epoch: int
+    total_epochs: int
+    latest_train_loss: Optional[float]
+    latest_val_loss: Optional[float]
+    latest_accuracy: Optional[float]
+    latest_map50: Optional[float]
+    estimated_time_remaining_minutes: Optional[int]
+    gpu_utilization_percent: Optional[float]
+    memory_usage_gb: Optional[float]
+    created_at: datetime
+    started_at: Optional[datetime]
+    completed_at: Optional[datetime]
+    error_message: Optional[str]
+    
+    class Config:
+        from_attributes = True
+
+
+class TrainingJobProgress(BaseModel):
+    """Real-time training progress update."""
+    job_id: int
+    status: str
+    progress_percent: float
+    current_epoch: int
+    latest_metrics: Dict[str, float]
+    estimated_time_remaining: Optional[int]
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+
+
+class ActiveLearningSuggestion(BaseModel):
+    """Active learning suggestion response."""
+    id: int
+    analysis_id: int
+    image_id: str
+    uncertainty_score: float
+    priority_score: float
+    selection_method: str
+    suggested_defect_types: List[Dict[str, Any]]
+    status: str
+    added_at: datetime
+    
+    class Config:
+        from_attributes = True
+
+
+class ModelDeploymentRequest(BaseModel):
+    """Request to deploy a model version."""
+    model_version_id: int
+    deployment_strategy: str = Field(default="replace", description="replace, canary, blue_green")
+    rollback_threshold: Optional[float] = Field(None, ge=0.0, le=1.0, description="Auto-rollback if accuracy drops below this")
+
+
+class ModelRollbackRequest(BaseModel):
+    """Request to rollback to a previous model version."""
+    target_version_id: int
+    reason: str = Field(..., min_length=1, max_length=500)

@@ -12,7 +12,13 @@ from db.models import (
     Review,
     ReviewAnnotation,
     ComplianceCertificate,
-    OperatorPerformance
+    OperatorPerformance,
+    CustomDefectType,
+    TrainingSample,
+    ModelVersion,
+    TrainingDataset,
+    TrainingJob,
+    ActiveLearningQueue
 )
 
 __all__ = [
@@ -30,4 +36,10 @@ __all__ = [
     "ReviewAnnotation",
     "ComplianceCertificate",
     "OperatorPerformance",
+    "CustomDefectType",
+    "TrainingSample",
+    "ModelVersion",
+    "TrainingDataset",
+    "TrainingJob",
+    "ActiveLearningQueue",
 ]

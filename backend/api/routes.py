@@ -338,25 +338,30 @@ async def detect_defects(
 @router.post("/explain", response_model=ExplainResponse)
 async def explain_detection(
     file: UploadFile = File(...),
+    methods: str = Query("gradcam", description="XAI methods to use (comma-separated): gradcam,lime,shap,ig,all"),
     # # Auth disabled,  # Auth disabled for now
 ):
     """
-    Generate XAI explanations for a radiographic weld image using Grad-CAM.
+    Generate XAI explanations for a radiographic weld image using multiple methods.
     
-    **✅ REAL XAI ENABLED**: Uses actual Grad-CAM on YOLOv8 classification model!
+    **✅ ADVANCED XAI ENABLED**: Supports Grad-CAM, LIME, SHAP, and Integrated Gradients!
     
     Features:
-    - Grad-CAM heatmap showing defect localization
+    - **Grad-CAM**: Class Activation Mapping showing defect localization
+    - **LIME**: Local Interpretable Model-agnostic Explanations with superpixels
+    - **SHAP**: SHapley Additive exPlanations for pixel-level attribution
+    - **Integrated Gradients**: Gradient-based attribution along path from baseline
+    - **Aggregated**: Consensus heatmap combining multiple methods
     - Class probabilities for all defect types
-    - Detected defect regions with bounding boxes  
     - Natural language description of findings
     - Operator-friendly recommendations
     
     Args:
         file: Uploaded radiographic image (JPEG, PNG)
+        methods: Comma-separated list of methods (gradcam,lime,shap,ig,all)
         
     Returns:
-        ExplainResponse with heatmaps, descriptions, and recommendations
+        ExplainResponse with method-specific heatmaps and consensus visualization
         
     Raises:
         HTTPException: If explanation generation fails
@@ -376,39 +381,91 @@ async def explain_detection(
             image.save(temp_path)
             
             logger.info(f"Processing image for XAI explanation: {file.filename}")
+            logger.info(f"Requested methods: {methods}")
             
-            # Generate complete explanation
-            explanation_result = explainer.explain_prediction(
-                str(temp_path),
-                include_overlay=True,
-                include_regions=True,
-                include_description=True
-            )
+            # Parse methods
+            method_list = [m.strip().lower() for m in methods.split(',')]
             
-            # Build response
-            # Primary Grad-CAM heatmap
-            gradcam_explanation = ExplanationResult(
-                method="gradcam",
-                heatmap_base64=explanation_result['heatmap_base64'],
-                confidence_score=explanation_result['prediction']['confidence']
-            )
-            
-            # Also include overlay as a separate "method"
-            overlay_explanation = ExplanationResult(
-                method="overlay",
-                heatmap_base64=explanation_result['overlay_base64'],
-                confidence_score=explanation_result['prediction']['confidence']
-            )
-            
-            # Calculate consensus score (for now, use prediction confidence)
-            consensus_score = explanation_result['prediction']['confidence']
-            
-            # Aggregated heatmap (use Grad-CAM as primary)
-            aggregated_heatmap = explanation_result['heatmap_base64']
+            # Check if we should use multi-method or single method
+            if len(method_list) > 1 or 'all' in method_list or any(m in method_list for m in ['lime', 'shap', 'ig']):
+                # Use new multi-method explainer
+                logger.info("Using multi-method XAI explainer")
+                explanation_result = explainer.explain_with_methods(
+                    str(temp_path),
+                    methods=method_list,
+                    include_aggregated=True
+                )
+                
+                # Build response from multi-method results
+                explanations = []
+                for method_name, method_result in explanation_result['methods'].items():
+                    if 'error' not in method_result:
+                        # Use overlay if available, otherwise heatmap
+                        heatmap_b64 = method_result.get('overlay_base64') or method_result.get('heatmap_base64')
+                        explanations.append(ExplanationResult(
+                            method=method_name,
+                            heatmap_base64=heatmap_b64,
+                            confidence_score=method_result['confidence_score']
+                        ))
+                
+                # Get aggregated or use first method as fallback
+                if 'aggregated' in explanation_result:
+                    aggregated_heatmap = explanation_result['aggregated']['overlay_base64']
+                    consensus_score = explanation_result['aggregated']['consensus_score']
+                else:
+                    first_method = list(explanation_result['methods'].values())[0]
+                    aggregated_heatmap = first_method.get('overlay_base64') or first_method.get('heatmap_base64')
+                    consensus_score = explanation_result['prediction']['confidence']
+                
+                # Add regions and descriptions from Grad-CAM if available
+                regions = []
+                location_desc = ""
+                description = ""
+                recommendation = ""
+                
+                if 'gradcam' in explanation_result['methods']:
+                    # Get detailed info from traditional explainer for Grad-CAM
+                    gradcam_detail = explainer.explain_prediction(str(temp_path), include_regions=True, include_description=True)
+                    regions = gradcam_detail.get('regions', [])
+                    location_desc = gradcam_detail.get('location_description', '')
+                    description = gradcam_detail.get('description', '')
+                    recommendation = gradcam_detail.get('recommendation', '')
+                
+            else:
+                # Use traditional single-method explainer (Grad-CAM only)
+                logger.info("Using traditional Grad-CAM explainer")
+                explanation_result = explainer.explain_prediction(
+                    str(temp_path),
+                    include_overlay=True,
+                    include_regions=True,
+                    include_description=True
+                )
+                
+                # Build response
+                gradcam_explanation = ExplanationResult(
+                    method="gradcam",
+                    heatmap_base64=explanation_result['heatmap_base64'],
+                    confidence_score=explanation_result['prediction']['confidence']
+                )
+                
+                overlay_explanation = ExplanationResult(
+                    method="overlay",
+                    heatmap_base64=explanation_result['overlay_base64'],
+                    confidence_score=explanation_result['prediction']['confidence']
+                )
+                
+                explanations = [gradcam_explanation, overlay_explanation]
+                consensus_score = explanation_result['prediction']['confidence']
+                aggregated_heatmap = explanation_result['heatmap_base64']
+                
+                regions = explanation_result.get('regions', [])
+                location_desc = explanation_result.get('location_description', '')
+                description = explanation_result.get('description', '')
+                recommendation = explanation_result.get('recommendation', '')
             
             response = ExplainResponse(
                 image_id=str(uuid.uuid4()),
-                explanations=[gradcam_explanation, overlay_explanation],
+                explanations=explanations,
                 aggregated_heatmap=aggregated_heatmap,
                 consensus_score=consensus_score,
                 computation_time_ms=50.0,  # Approximate
@@ -416,10 +473,11 @@ async def explain_detection(
                 metadata={
                     'prediction': explanation_result['prediction'],
                     'probabilities': explanation_result['probabilities'],
-                    'regions': explanation_result['regions'],
-                    'location_description': explanation_result['location_description'],
-                    'description': explanation_result['description'],
-                    'recommendation': explanation_result['recommendation']
+                    'regions': regions,
+                    'location_description': location_desc,
+                    'description': description,
+                    'recommendation': recommendation,
+                    'methods_used': list(explanation_result.get('methods', {}).keys())
                 }
             )
             
