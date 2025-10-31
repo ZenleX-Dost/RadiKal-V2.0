@@ -339,6 +339,7 @@ async def detect_defects(
 async def explain_detection(
     file: UploadFile = File(...),
     methods: str = Query("gradcam", description="XAI methods to use (comma-separated): gradcam,lime,shap,ig,all"),
+    db: Session = Depends(get_db),
     # # Auth disabled,  # Auth disabled for now
 ):
     """
@@ -423,13 +424,21 @@ async def explain_detection(
                 description = ""
                 recommendation = ""
                 
-                if 'gradcam' in explanation_result['methods']:
+                if 'gradcam' in explanation_result['methods'] and 'error' not in explanation_result['methods']['gradcam']:
                     # Get detailed info from traditional explainer for Grad-CAM
-                    gradcam_detail = explainer.explain_prediction(str(temp_path), include_regions=True, include_description=True)
-                    regions = gradcam_detail.get('regions', [])
-                    location_desc = gradcam_detail.get('location_description', '')
-                    description = gradcam_detail.get('description', '')
-                    recommendation = gradcam_detail.get('recommendation', '')
+                    try:
+                        gradcam_detail = explainer.explain_prediction(str(temp_path), include_regions=True, include_description=True)
+                        regions = gradcam_detail.get('regions', [])
+                        location_desc = gradcam_detail.get('location_description', '')
+                        description = gradcam_detail.get('description', '')
+                        recommendation = gradcam_detail.get('recommendation', '')
+                    except Exception as e:
+                        logger.warning(f"Failed to get detailed Grad-CAM info: {e}")
+                        # Use defaults
+                        regions = []
+                        location_desc = "Unable to generate location description"
+                        description = f"Detected: {explanation_result['prediction']['class_full_name']}"
+                        recommendation = "Review the analysis results"
                 
             else:
                 # Use traditional single-method explainer (Grad-CAM only)
@@ -483,8 +492,58 @@ async def explain_detection(
             
             logger.info(f"✅ Generated XAI explanation: {explanation_result['prediction']['class_full_name']} "
                        f"({explanation_result['prediction']['confidence']*100:.1f}% confidence)")
-            logger.info(f"   Location: {explanation_result['location_description']}")
-            logger.info(f"   Regions detected: {len(explanation_result['regions'])}")
+            logger.info(f"   Location: {location_desc}")
+            logger.info(f"   Regions detected: {len(regions)}")
+            
+            # Save to database - Only add Explanation, Analysis is already created by /detect
+            try:
+                predicted_class = explanation_result['prediction']['class_full_name']
+                confidence = explanation_result['prediction']['confidence']
+                
+                # Check if analysis already exists from /detect call
+                existing_analysis = db.query(Analysis).filter(Analysis.image_id == response.image_id).first()
+                
+                if existing_analysis:
+                    # Update existing analysis with classification info
+                    existing_analysis.mean_confidence = confidence
+                    existing_analysis.has_defects = predicted_class.lower() != 'no defect'
+                    logger.info(f"✅ Updated existing analysis: {response.image_id}")
+                    analysis_db_id = existing_analysis.id
+                else:
+                    # No existing analysis (direct /explain call), create new one
+                    has_defects = predicted_class.lower() != 'no defect'
+                    db_analysis = Analysis(
+                        image_id=response.image_id,
+                        filename=file.filename or "unknown.jpg",
+                        upload_timestamp=datetime.now(),
+                        inference_time_ms=response.computation_time_ms,
+                        status='completed',
+                        has_defects=has_defects,
+                        num_detections=1 if has_defects else 0,
+                        highest_severity='high' if has_defects else None,
+                        mean_confidence=confidence,
+                        model_version='YOLOv8s-cls',
+                    )
+                    db.add(db_analysis)
+                    db.flush()  # Get the ID
+                    analysis_db_id = db_analysis.id
+                    logger.info(f"✅ Created new analysis: {response.image_id}")
+                
+                # Create Explanation record
+                db_explanation = Explanation(
+                    analysis_id=analysis_db_id,
+                    method=','.join(list(explanation_result.get('methods', {}).keys()) if 'methods' in explanation_result else ['gradcam']),
+                    heatmap_base64=response.aggregated_heatmap[:1000] if response.aggregated_heatmap else None,  # Store truncated
+                    confidence_score=confidence,
+                )
+                db.add(db_explanation)
+                
+                db.commit()
+                logger.info(f"✅ Saved explanation to database for analysis: {response.image_id}")
+            except Exception as db_error:
+                logger.error(f"Failed to save to database: {db_error}")
+                db.rollback()
+                # Continue anyway - don't fail the request
             
             return response
         

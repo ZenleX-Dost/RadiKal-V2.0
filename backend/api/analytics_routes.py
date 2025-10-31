@@ -54,7 +54,9 @@ async def get_defect_trends(
             start = datetime.now() - timedelta(days=30)
         
         if end_date:
+            # Parse end date and set to end of day (23:59:59)
             end = datetime.fromisoformat(end_date)
+            end = end.replace(hour=23, minute=59, second=59)
         else:
             end = datetime.now()
         
@@ -87,13 +89,16 @@ async def get_defect_trends(
                         defect_types[class_name] = defect_types.get(class_name, 0) + 1
         
         return TrendAnalysisResponse(
-            start_date=start,
-            end_date=end,
-            total_inspections=total_inspections,
-            defect_rate=defect_rate,
             trends=trends,
-            defect_type_distribution=defect_types,
-            group_by=group_by,
+            summary={
+                'start_date': start.isoformat(),
+                'end_date': end.isoformat(),
+                'total_inspections': total_inspections,
+                'defect_rate': defect_rate,
+                'defect_type_distribution': defect_types,
+                'group_by': group_by,
+            },
+            date_range={'start': start, 'end': end},
         )
         
     except Exception as e:
@@ -212,7 +217,7 @@ def _aggregate_by_period(analyses, group_by, start, end):
             total = len(period_analyses)
             
             trends.append(DefectTrendData(
-                date=current,
+                period=current.strftime('%Y-%m-%d') if group_by == 'day' else current.strftime('%Y-%m'),
                 total_inspections=total,
                 defect_count=defect_count,
                 defect_rate=(defect_count / total * 100) if total > 0 else 0,

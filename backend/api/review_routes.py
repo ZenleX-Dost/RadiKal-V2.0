@@ -106,7 +106,7 @@ async def get_review_queue(
                 severity = analysis.highest_severity
             
             queue_items.append(ReviewQueueItem(
-                analysis_id=analysis.id,
+                analysis_id=analysis.image_id,  # Use image_id (UUID string) not id (integer)
                 image_name=analysis.filename,
                 upload_timestamp=analysis.upload_timestamp,
                 defect_type=defect_type,
