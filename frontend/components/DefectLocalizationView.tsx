@@ -14,16 +14,29 @@
 
 import { ExplanationResponse, DefectRegion } from '@/types';
 import { useState, useRef, useEffect } from 'react';
-import { 
-  ZoomIn, 
-  ZoomOut, 
-  Maximize2, 
-  AlertTriangle, 
-  CheckCircle, 
+import {
+  ZoomIn,
+  ZoomOut,
+  Maximize2,
+  AlertTriangle,
+  CheckCircle,
   Info,
   MapPin,
-  Activity
+  Activity,
+  ImageOff
 } from 'lucide-react';
+
+// Placeholder SVG for when image fails to load
+const PLACEHOLDER_IMAGE = 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="400" height="300"%3E%3Crect fill="%23f3f4f6" width="400" height="300"/%3E%3Ctext x="50%25" y="50%25" text-anchor="middle" fill="%239ca3af" font-size="16"%3ENo heatmap available%3C/text%3E%3C/svg%3E';
+
+// Helper to ensure base64 image has proper data URL prefix
+const formatBase64Image = (base64String: string | undefined | null): string => {
+  if (!base64String) return PLACEHOLDER_IMAGE;
+  // If already has data: prefix, return as-is
+  if (base64String.startsWith('data:')) return base64String;
+  // Otherwise add the PNG data URL prefix
+  return `data:image/png;base64,${base64String}`;
+};
 
 interface DefectLocalizationViewProps {
   explanation: ExplanationResponse;
@@ -40,6 +53,8 @@ export default function DefectLocalizationView({
   const [zoom, setZoom] = useState(1);
   const [selectedRegion, setSelectedRegion] = useState<number | null>(null);
   const [hoveredRegion, setHoveredRegion] = useState<number | null>(null);
+  const [imageError, setImageError] = useState(false);
+  const [imageLoaded, setImageLoaded] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -99,7 +114,7 @@ export default function DefectLocalizationView({
     regions.forEach((region, idx) => {
       const isSelected = selectedRegion === idx;
       const isHovered = hoveredRegion === idx;
-      
+
       // Draw bounding box
       ctx.strokeStyle = isSelected ? '#ef4444' : isHovered ? '#f59e0b' : '#3b82f6';
       ctx.lineWidth = isSelected ? 3 : isHovered ? 2 : 1.5;
@@ -109,10 +124,10 @@ export default function DefectLocalizationView({
       const label = `Region ${idx + 1}`;
       ctx.font = '12px sans-serif';
       const textWidth = ctx.measureText(label).width;
-      
+
       ctx.fillStyle = isSelected ? '#ef4444' : isHovered ? '#f59e0b' : '#3b82f6';
       ctx.fillRect(region.x, region.y - 20, textWidth + 8, 18);
-      
+
       // Draw label text
       ctx.fillStyle = 'white';
       ctx.fillText(label, region.x + 4, region.y - 6);
@@ -187,11 +202,10 @@ export default function DefectLocalizationView({
         <div className="flex items-center space-x-2">
           <button
             onClick={() => setShowOverlay(!showOverlay)}
-            className={`px-3 py-1.5 rounded text-sm font-medium transition-colors ${
-              showOverlay
-                ? 'bg-blue-600 text-white'
-                : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
-            }`}
+            className={`px-3 py-1.5 rounded text-sm font-medium transition-colors ${showOverlay
+              ? 'bg-blue-600 text-white'
+              : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+              }`}
           >
             {showOverlay ? 'Hide' : 'Show'} Overlay
           </button>
@@ -237,24 +251,48 @@ export default function DefectLocalizationView({
             transition: 'transform 0.2s ease-out',
           }}
         >
+          {/* Loading indicator */}
+          {!imageLoaded && !imageError && (
+            <div className="absolute inset-0 flex items-center justify-center min-h-[200px]">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+            </div>
+          )}
+
+          {/* Error state */}
+          {imageError && (
+            <div className="absolute inset-0 flex flex-col items-center justify-center text-gray-500 min-h-[200px]">
+              <ImageOff className="h-12 w-12 mb-2" />
+              <p className="text-sm">Failed to load heatmap</p>
+            </div>
+          )}
+
           {/* Base image (heatmap or original) */}
           <img
             src={
-              showOverlay && explanation.explanations[1]
-                ? `data:image/png;base64,${explanation.explanations[1].heatmap_base64}`
-                : explanation.explanations[0]
-                ? `data:image/png;base64,${explanation.explanations[0].heatmap_base64}`
-                : originalImage
+              imageError
+                ? PLACEHOLDER_IMAGE
+                : formatBase64Image(
+                  explanation.aggregated_heatmap ||
+                  (showOverlay && explanation.explanations?.[1]?.heatmap_base64) ||
+                  explanation.explanations?.[0]?.heatmap_base64 ||
+                  originalImage
+                )
             }
             alt="Defect visualization"
-            className="block max-w-none"
+            className={`block max-w-none ${!imageLoaded ? 'opacity-0' : 'opacity-100'} transition-opacity duration-200`}
             onLoad={(e) => {
+              setImageLoaded(true);
+              setImageError(false);
               // Set canvas size to match image
               if (canvasRef.current) {
                 const img = e.target as HTMLImageElement;
                 canvasRef.current.width = img.naturalWidth;
                 canvasRef.current.height = img.naturalHeight;
               }
+            }}
+            onError={() => {
+              setImageError(true);
+              setImageLoaded(true);
             }}
           />
 
@@ -297,13 +335,12 @@ export default function DefectLocalizationView({
             {regions.map((region, idx) => (
               <div
                 key={idx}
-                className={`p-3 border-2 rounded-lg cursor-pointer transition-all ${
-                  selectedRegion === idx
-                    ? 'border-red-500 bg-red-50'
-                    : hoveredRegion === idx
+                className={`p-3 border-2 rounded-lg cursor-pointer transition-all ${selectedRegion === idx
+                  ? 'border-red-500 bg-red-50'
+                  : hoveredRegion === idx
                     ? 'border-yellow-500 bg-yellow-50'
                     : 'border-gray-300 bg-white hover:border-blue-400'
-                }`}
+                  }`}
                 onClick={() => {
                   setSelectedRegion(idx);
                   if (onRegionClick) onRegionClick(region);
@@ -340,11 +377,10 @@ export default function DefectLocalizationView({
               </div>
               <div className="w-full bg-gray-200 rounded-full h-2.5 overflow-hidden">
                 <div
-                  className={`h-2.5 rounded-full transition-all ${
-                    className === prediction.predicted_class_name
-                      ? 'bg-blue-600'
-                      : 'bg-gray-400'
-                  }`}
+                  className={`h-2.5 rounded-full transition-all ${className === prediction.predicted_class_name
+                    ? 'bg-blue-600'
+                    : 'bg-gray-400'
+                    }`}
                   style={{ width: `${probability * 100}%` }}
                 />
               </div>
@@ -370,36 +406,32 @@ export default function DefectLocalizationView({
 
         {/* Recommendation */}
         {recommendation && (
-          <div className={`p-4 border rounded-lg ${
-            prediction.severity === 'CRITICAL' || prediction.severity === 'HIGH'
-              ? 'bg-red-50 border-red-200'
-              : prediction.severity === 'ACCEPTABLE'
+          <div className={`p-4 border rounded-lg ${prediction.severity === 'CRITICAL' || prediction.severity === 'HIGH'
+            ? 'bg-red-50 border-red-200'
+            : prediction.severity === 'ACCEPTABLE'
               ? 'bg-green-50 border-green-200'
               : 'bg-yellow-50 border-yellow-200'
-          }`}>
+            }`}>
             <div className="flex items-start space-x-2">
-              <AlertTriangle className={`w-5 h-5 mt-0.5 flex-shrink-0 ${
-                prediction.severity === 'CRITICAL' || prediction.severity === 'HIGH'
-                  ? 'text-red-600'
-                  : prediction.severity === 'ACCEPTABLE'
+              <AlertTriangle className={`w-5 h-5 mt-0.5 flex-shrink-0 ${prediction.severity === 'CRITICAL' || prediction.severity === 'HIGH'
+                ? 'text-red-600'
+                : prediction.severity === 'ACCEPTABLE'
                   ? 'text-green-600'
                   : 'text-yellow-600'
-              }`} />
+                }`} />
               <div>
-                <p className={`font-semibold mb-2 ${
-                  prediction.severity === 'CRITICAL' || prediction.severity === 'HIGH'
-                    ? 'text-red-900'
-                    : prediction.severity === 'ACCEPTABLE'
+                <p className={`font-semibold mb-2 ${prediction.severity === 'CRITICAL' || prediction.severity === 'HIGH'
+                  ? 'text-red-900'
+                  : prediction.severity === 'ACCEPTABLE'
                     ? 'text-green-900'
                     : 'text-yellow-900'
-                }`}>Recommendation</p>
-                <p className={`text-sm ${
-                  prediction.severity === 'CRITICAL' || prediction.severity === 'HIGH'
-                    ? 'text-red-800'
-                    : prediction.severity === 'ACCEPTABLE'
+                  }`}>Recommendation</p>
+                <p className={`text-sm ${prediction.severity === 'CRITICAL' || prediction.severity === 'HIGH'
+                  ? 'text-red-800'
+                  : prediction.severity === 'ACCEPTABLE'
                     ? 'text-green-800'
                     : 'text-yellow-800'
-                }`}>{recommendation}</p>
+                  }`}>{recommendation}</p>
               </div>
             </div>
           </div>

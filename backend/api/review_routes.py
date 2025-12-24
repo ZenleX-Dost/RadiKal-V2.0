@@ -30,6 +30,17 @@ class ReviewCreate(BaseModel):
     status: str  # 'approved', 'rejected', 'needs_second_opinion'
     comments: Optional[str] = None
     reviewer_notes: Optional[str] = None
+    assigned_reviewer_id: Optional[str] = None  # For second opinion requests
+
+
+class ReviewerInfo(BaseModel):
+    id: str
+    name: str
+    email: Optional[str]
+    role: str  # 'technician', 'project_chief', 'manager'
+    
+    class Config:
+        from_attributes = True
 
 
 class Annotation(BaseModel):
@@ -51,6 +62,8 @@ class ReviewResponse(BaseModel):
     analysis_id: str
     reviewer_id: str
     reviewer_name: str
+    assigned_reviewer_id: Optional[str] = None
+    assigned_reviewer_name: Optional[str] = None
     status: str
     comments: Optional[str]
     reviewer_notes: Optional[str]
@@ -69,9 +82,69 @@ class ReviewQueueItem(BaseModel):
     confidence: float
     review_status: str  # 'pending', 'in_progress', 'completed'
     reviewer_id: Optional[str]
+    assigned_reviewer_name: Optional[str] = None
+    image_base64: Optional[str] = None  # Base64 encoded image for preview
+    created_by_name: Optional[str] = None  # Technician who uploaded
 
 
 # === Endpoints ===
+
+@router.get("/reviewers", response_model=List[ReviewerInfo])
+async def get_available_reviewers(
+    current_user_id: str = "system",  # TODO: Get from auth
+    db: Session = Depends(get_db),
+):
+    """
+    Get list of available reviewers (other technicians + project chief).
+    
+    Technicians can request review from:
+    - Other technicians (peer review)
+    - Their assigned project chief (escalation)
+    """
+    try:
+        from sqlalchemy import text
+        
+        # Get current user's role and project chief
+        user_query = text("""
+            SELECT role, project_chief_id 
+            FROM accounts 
+            WHERE id = :user_id
+        """)
+        user_result = db.execute(user_query, {"user_id": current_user_id}).fetchone()
+        
+        if not user_result:
+            return []
+        
+        user_role, project_chief_id = user_result
+        
+        # Get all technicians except current user + project chief
+        reviewers_query = text("""
+            SELECT id, name, email, role
+            FROM accounts
+            WHERE (role IN ('technician', 'project_chief') AND id != :user_id)
+               OR (role = 'project_chief' AND id = :chief_id)
+            ORDER BY role DESC, name ASC
+        """)
+        
+        reviewers = db.execute(reviewers_query, {
+            "user_id": current_user_id,
+            "chief_id": project_chief_id or current_user_id
+        }).fetchall()
+        
+        return [
+            ReviewerInfo(
+                id=str(r[0]),
+                name=r[1],
+                email=r[2],
+                role=r[3] or 'technician'
+            )
+            for r in reviewers
+        ]
+        
+    except Exception as e:
+        logger.error(f"Failed to get reviewers: {e}", exc_info=True)
+        return []
+
 
 @router.get("/queue", response_model=List[ReviewQueueItem])
 async def get_review_queue(
@@ -99,11 +172,24 @@ async def get_review_queue(
             defect_type = None
             severity = None
             confidence = analysis.mean_confidence or 0.0
+            image_base64 = None
             
             if analysis.detections and len(analysis.detections) > 0:
                 first_detection = analysis.detections[0]
                 defect_type = first_detection.class_name
                 severity = analysis.highest_severity
+            
+            # Get image: prefer stored original, fallback to heatmap
+            if analysis.image_base64:
+                image_base64 = analysis.image_base64
+            elif analysis.original_image_base64:
+                # Use full image if preview not available
+                image_base64 = analysis.original_image_base64[:50000] if len(analysis.original_image_base64) > 50000 else analysis.original_image_base64
+            elif analysis.explanations and len(analysis.explanations) > 0:
+                # Fallback to heatmap if no original image stored
+                latest_explanation = analysis.explanations[0]
+                if latest_explanation.heatmap_base64:
+                    image_base64 = latest_explanation.heatmap_base64
             
             queue_items.append(ReviewQueueItem(
                 analysis_id=analysis.image_id,  # Use image_id (UUID string) not id (integer)
@@ -114,6 +200,7 @@ async def get_review_queue(
                 confidence=confidence,
                 review_status="pending",  # TODO: Add review status to DB
                 reviewer_id=None,
+                image_base64=image_base64,
             ))
         
         return queue_items
@@ -126,41 +213,67 @@ async def get_review_queue(
 @router.post("/submit", response_model=ReviewResponse)
 async def submit_review(
     review: ReviewCreate,
+    current_user_id: str = "system",
     db: Session = Depends(get_db),
     # current_user = Depends(get_current_user),  # TODO: Enable authentication
 ):
     """
-    Submit a review for an analysis.
+    Submit a review for an analysis with hierarchical reviewer assignment.
     
     Status options:
     - approved: AI prediction is correct
     - rejected: AI prediction is incorrect
-    - needs_second_opinion: Escalate to senior inspector
+    - needs_second_opinion: Escalate to assigned reviewer (peer or project chief)
+    
+    Hierarchical Review Workflow:
+    - Technician uploads image and runs analysis
+    - Technician can request second opinion from:
+      * Other technicians (peer review)
+      * Their assigned project chief (escalation)
+    - assigned_reviewer_id determines who receives the review request
     """
     try:
-        # Verify analysis exists
-        analysis = db.query(Analysis).filter(Analysis.id == review.analysis_id).first()
+        # Verify analysis exists (analysis_id is image_id, a UUID string)
+        analysis = db.query(Analysis).filter(Analysis.image_id == review.analysis_id).first()
         if not analysis:
             raise HTTPException(status_code=404, detail="Analysis not found")
         
-        # Create review record
-        # TODO: Add Review model to database
-        reviewer_id = 'system'  # TODO: Get from current_user when auth is enabled
-        reviewer_name = 'System'  # TODO: Get from current_user when auth is enabled
+        # Get current user info
+        user_query = text("SELECT name, role FROM accounts WHERE id = :user_id")
+        user_result = db.execute(user_query, {"user_id": current_user_id}).fetchone()
+        reviewer_name = user_result[0] if user_result else "System"
+        user_role = user_result[1] if user_result else None
         
+        # Get assigned reviewer info if specified
+        assigned_reviewer_name = None
+        if review.assigned_reviewer_id:
+            assigned_query = text("SELECT name, role FROM accounts WHERE id = :reviewer_id")
+            assigned_result = db.execute(assigned_query, {"reviewer_id": review.assigned_reviewer_id}).fetchone()
+            assigned_reviewer_name = assigned_result[0] if assigned_result else None
+            assigned_role = assigned_result[1] if assigned_result else None
+            
+            logger.info(f"Review assigned to: {assigned_reviewer_name} ({assigned_role})")
+        
+        # Create review record
+        # TODO: Add Review model to database with assigned_reviewer_id column
         review_record = {
             "id": f"REV-{datetime.now().strftime('%Y%m%d%H%M%S')}",
             "analysis_id": review.analysis_id,
-            "reviewer_id": reviewer_id,
+            "reviewer_id": current_user_id,
             "reviewer_name": reviewer_name,
+            "assigned_reviewer_id": review.assigned_reviewer_id,
+            "assigned_reviewer_name": assigned_reviewer_name,
             "status": review.status,
             "comments": review.comments,
             "reviewer_notes": review.reviewer_notes,
             "created_at": datetime.now(),
         }
         
-        logger.info(f"Review submitted for analysis {review.analysis_id} by {reviewer_name}")
-        logger.info(f"Review status: {review.status}")
+        # Log hierarchical review action
+        if review.status == "needs_second_opinion" and review.assigned_reviewer_id:
+            logger.info(f"🔄 Hierarchical review requested: {reviewer_name} → {assigned_reviewer_name}")
+        else:
+            logger.info(f"✅ Review submitted: {reviewer_name} marked as {review.status}")
         
         return ReviewResponse(**review_record)
         

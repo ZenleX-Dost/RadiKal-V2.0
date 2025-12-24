@@ -168,6 +168,30 @@ class CalibrationResponse(BaseModel):
     timestamp: datetime = Field(default_factory=datetime.utcnow)
 
 
+class PreprocessRequest(BaseModel):
+    """Request model for image preprocessing with contrast adjustment."""
+    contrast: float = Field(default=1.0, ge=0.5, le=3.0)
+    method: str = Field(default='clahe', pattern='^(linear|histogram|clahe|gamma)$')
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "contrast": 1.5,
+                "method": "clahe"
+            }
+        }
+
+
+class PreprocessResponse(BaseModel):
+    """Response model for image preprocessing."""
+    image_id: str
+    original_base64: str
+    processed_base64: str
+    contrast: float
+    method: str
+    timestamp: datetime
+
+
 class UncertaintyMetrics(BaseModel):
     """Uncertainty quantification metrics."""
     predictive_entropy: float

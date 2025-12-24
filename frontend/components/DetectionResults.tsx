@@ -5,7 +5,7 @@
  */
 
 import { Detection } from '@/types';
-import { AlertTriangle, CheckCircle, Info } from 'lucide-react';
+import { AlertTriangle, CheckCircle, Info, ImageOff } from 'lucide-react';
 import { useRef, useEffect, useState } from 'react';
 
 interface DetectionResultsProps {
@@ -13,6 +13,9 @@ interface DetectionResultsProps {
   detections: Detection[];
   meanUncertainty: number;
 }
+
+// Placeholder SVG for when image fails to load
+const PLACEHOLDER_IMAGE = 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="400" height="300"%3E%3Crect fill="%23f3f4f6" width="400" height="300"/%3E%3Ctext x="50%25" y="50%25" text-anchor="middle" fill="%239ca3af" font-size="16"%3EImage not available%3C/text%3E%3C/svg%3E';
 
 export default function DetectionResults({
   imageUrl,
@@ -22,6 +25,8 @@ export default function DetectionResults({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const imageRef = useRef<HTMLImageElement>(null);
   const [imageDimensions, setImageDimensions] = useState({ width: 0, height: 0 });
+  const [imageError, setImageError] = useState(false);
+  const [imageLoaded, setImageLoaded] = useState(false);
 
   const getSeverityColor = (severity: string) => {
     switch (severity) {
@@ -56,7 +61,7 @@ export default function DetectionResults({
   useEffect(() => {
     const image = imageRef.current;
     const canvas = canvasRef.current;
-    
+
     if (!image || !canvas || !imageUrl) return;
 
     const drawBoundingBoxes = () => {
@@ -80,19 +85,19 @@ export default function DetectionResults({
         const [x1, y1, x2, y2] = detection.bbox;
         const width = x2 - x1;
         const height = y2 - y1;
-        
+
         // Get color based on severity
         const color = getSeverityColor(detection.severity).box;
-        
+
         // Draw bounding box with thicker line for visibility
         ctx.strokeStyle = color;
         ctx.lineWidth = 4;
         ctx.strokeRect(x1, y1, width, height);
-        
+
         // Draw semi-transparent filled rectangle
         ctx.fillStyle = color + '15'; // Add transparency
         ctx.fillRect(x1, y1, width, height);
-        
+
         // Calculate font size based on image size
         const fontSize = Math.max(16, Math.floor(naturalWidth / 40));
         const label = `${detection.class_name} ${(detection.confidence * 100).toFixed(0)}%`;
@@ -100,7 +105,7 @@ export default function DetectionResults({
         const textMetrics = ctx.measureText(label);
         const textHeight = fontSize + 4;
         const padding = 6;
-        
+
         // Draw label background at top
         const labelY = Math.max(textHeight + padding, y1);
         ctx.fillStyle = color;
@@ -110,11 +115,11 @@ export default function DetectionResults({
           textMetrics.width + padding * 2,
           textHeight + padding
         );
-        
+
         // Label text - Always white for visibility
         ctx.fillStyle = '#FFFFFF';
         ctx.fillText(label, x1 + padding, labelY - padding);
-        
+
         // Draw detection number badge
         const badgeSize = fontSize + 10;
         ctx.fillStyle = color;
@@ -124,7 +129,7 @@ export default function DetectionResults({
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillText(`${idx + 1}`, x1 + badgeSize / 2, y1 + badgeSize / 2);
-        
+
         // Reset text alignment
         ctx.textAlign = 'left';
         ctx.textBaseline = 'alphabetic';
@@ -163,15 +168,38 @@ export default function DetectionResults({
             </span>
           )}
         </h3>
-        <div className="relative border-2 border-gray-300 rounded-lg overflow-hidden bg-gray-50 flex items-center justify-center">
+        <div className="relative border-2 border-gray-300 rounded-lg overflow-hidden bg-gray-50 flex items-center justify-center min-h-[200px]">
+          {/* Loading indicator */}
+          {!imageLoaded && !imageError && (
+            <div className="absolute inset-0 flex items-center justify-center">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+            </div>
+          )}
+
+          {/* Error state */}
+          {imageError && (
+            <div className="absolute inset-0 flex flex-col items-center justify-center text-gray-500">
+              <ImageOff className="h-12 w-12 mb-2" />
+              <p className="text-sm">Failed to load image</p>
+            </div>
+          )}
+
           <div className="relative" style={{ maxHeight: '500px', maxWidth: '100%' }}>
             {/* Base image */}
-            <img 
+            <img
               ref={imageRef}
-              src={imageUrl} 
-              alt="Analyzed" 
-              className="block max-h-[500px] w-auto h-auto"
+              src={imageError ? PLACEHOLDER_IMAGE : (imageUrl || PLACEHOLDER_IMAGE)}
+              alt="Analyzed"
+              className={`block max-h-[500px] w-auto h-auto ${!imageLoaded ? 'opacity-0' : 'opacity-100'} transition-opacity duration-200`}
               style={{ objectFit: 'contain' }}
+              onLoad={() => {
+                setImageLoaded(true);
+                setImageError(false);
+              }}
+              onError={() => {
+                setImageError(true);
+                setImageLoaded(true);
+              }}
             />
             {/* Canvas overlay for bounding boxes - exactly same size as image */}
             <canvas

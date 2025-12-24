@@ -17,9 +17,11 @@ if ($pythonProcesses) {
     Write-Host "  No backend processes found" -ForegroundColor Gray
 }
 
-# Stop Node processes (Frontend)
+# Stop Node processes (Frontend) - excluding Adobe processes
 Write-Host "Stopping Frontend (Node.js)..." -ForegroundColor Yellow
-$nodeProcesses = Get-Process -Name "node" -ErrorAction SilentlyContinue
+$nodeProcesses = Get-Process -Name "node" -ErrorAction SilentlyContinue | Where-Object {
+    $_.Path -notmatch "Adobe"
+}
 if ($nodeProcesses) {
     $nodeProcesses | Stop-Process -Force
     Write-Host "  Frontend stopped ✓" -ForegroundColor Green

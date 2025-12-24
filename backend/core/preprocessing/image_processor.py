@@ -135,16 +135,95 @@ class ImageProcessor:
         
         return image
     
+    def adjust_contrast(
+        self,
+        image: np.ndarray,
+        contrast: float = 1.0,
+        method: str = 'linear'
+    ) -> np.ndarray:
+        """Adjust image contrast before processing.
+        
+        This can help reveal subtle defects in radiographic images.
+        
+        Args:
+            image: Input image as numpy array with values in [0, 255].
+            contrast: Contrast adjustment factor.
+                - 1.0 = no change
+                - < 1.0 = reduce contrast
+                - > 1.0 = increase contrast
+            method: Contrast adjustment method:
+                - 'linear': Simple linear scaling around mean
+                - 'histogram': Histogram equalization
+                - 'clahe': Contrast Limited Adaptive Histogram Equalization
+                - 'gamma': Gamma correction
+                
+        Returns:
+            Contrast-adjusted image.
+        """
+        if contrast == 1.0 and method == 'linear':
+            return image  # No adjustment needed
+        
+        # Ensure image is uint8 for OpenCV operations
+        if image.dtype != np.uint8:
+            if image.max() <= 1.0:
+                image = (image * 255).astype(np.uint8)
+            else:
+                image = image.astype(np.uint8)
+        
+        if method == 'linear':
+            # Linear contrast adjustment: new_value = contrast * (value - 128) + 128
+            image_float = image.astype(np.float32)
+            adjusted = contrast * (image_float - 128) + 128
+            adjusted = np.clip(adjusted, 0, 255).astype(np.uint8)
+            return adjusted
+            
+        elif method == 'histogram':
+            # Histogram equalization
+            if len(image.shape) == 3:
+                # Convert to LAB color space and equalize L channel
+                lab = cv2.cvtColor(image, cv2.COLOR_RGB2LAB)
+                lab[:, :, 0] = cv2.equalizeHist(lab[:, :, 0])
+                return cv2.cvtColor(lab, cv2.COLOR_LAB2RGB)
+            else:
+                return cv2.equalizeHist(image)
+                
+        elif method == 'clahe':
+            # CLAHE - particularly useful for radiographic images
+            clip_limit = 2.0 + (contrast - 1.0) * 2.0  # Scale clip limit with contrast
+            clip_limit = max(1.0, min(clip_limit, 10.0))  # Clamp to valid range
+            clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=(8, 8))
+            
+            if len(image.shape) == 3:
+                lab = cv2.cvtColor(image, cv2.COLOR_RGB2LAB)
+                lab[:, :, 0] = clahe.apply(lab[:, :, 0])
+                return cv2.cvtColor(lab, cv2.COLOR_LAB2RGB)
+            else:
+                return clahe.apply(image)
+                
+        elif method == 'gamma':
+            # Gamma correction: values < 1.0 brighten, > 1.0 darken
+            gamma = 1.0 / max(0.1, contrast)  # Invert so higher contrast = higher gamma effect
+            inv_gamma = 1.0 / gamma
+            table = np.array([((i / 255.0) ** inv_gamma) * 255 for i in range(256)]).astype(np.uint8)
+            return cv2.LUT(image, table)
+            
+        else:
+            raise ValueError(f"Unknown contrast method: {method}")
+    
     def preprocess(
         self,
         image: Union[str, np.ndarray, bytes],
-        resize: bool = True
+        resize: bool = True,
+        contrast: float = 1.0,
+        contrast_method: str = 'linear'
     ) -> np.ndarray:
         """Complete preprocessing pipeline.
         
         Args:
             image: Input image as file path, numpy array, or bytes.
             resize: Whether to resize the image.
+            contrast: Contrast adjustment factor (1.0 = no change).
+            contrast_method: Method for contrast adjustment ('linear', 'histogram', 'clahe', 'gamma').
             
         Returns:
             Preprocessed image ready for model inference.
@@ -155,6 +234,10 @@ class ImageProcessor:
             image = self.load_image_from_bytes(image)
         elif not isinstance(image, np.ndarray):
             raise ValueError(f"Unsupported image type: {type(image)}")
+        
+        # Apply contrast adjustment before other processing
+        if contrast != 1.0 or contrast_method != 'linear':
+            image = self.adjust_contrast(image, contrast, contrast_method)
         
         if resize:
             image = self.resize_image(image)

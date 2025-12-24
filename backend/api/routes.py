@@ -199,6 +199,8 @@ def numpy_to_base64(arr: np.ndarray) -> str:
 @router.post("/detect", response_model=DetectionResponse)
 async def detect_defects(
     file: UploadFile = File(...),
+    contrast: float = 1.0,
+    contrast_method: str = "linear",
     db: Session = Depends(get_db),
     # # Auth disabled,  # Auth disabled for now
 ):
@@ -210,6 +212,8 @@ async def detect_defects(
     
     Args:
         file: Uploaded image file (JPEG, PNG)
+        contrast: Contrast adjustment factor (1.0 = no change, >1.0 = increase, <1.0 = decrease)
+        contrast_method: Method for contrast adjustment ('linear', 'histogram', 'clahe', 'gamma')
         current_user: Authenticated user information
         
     Returns:
@@ -224,8 +228,8 @@ async def detect_defects(
         image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
         image_np = np.array(image)
         
-        # Preprocess
-        preprocessed = image_processor.preprocess(image_np)
+        # Preprocess with optional contrast adjustment
+        preprocessed = image_processor.preprocess(image_np, contrast=contrast, contrast_method=contrast_method)
         image_tensor = torch.from_numpy(
             image_processor.to_tensor(preprocessed)
         ).float().unsqueeze(0).to(DEVICE)
@@ -335,10 +339,78 @@ async def detect_defects(
         raise HTTPException(status_code=500, detail=f"Detection failed: {str(e)}")
 
 
+@router.post("/preprocess")
+async def preprocess_image(
+    file: UploadFile = File(...),
+    contrast: float = Query(default=1.0, ge=0.5, le=3.0),
+    method: str = Query(default='clahe', regex='^(linear|histogram|clahe|gamma)$')
+):
+    """Preprocess image with contrast adjustment before analysis.
+    
+    This endpoint allows technicians to adjust image contrast to reveal
+    subtle defects in radiographic images before running XAI analysis.
+    Provides real-time preview of original vs processed images.
+    
+    Args:
+        file: Image file to preprocess
+        contrast: Contrast adjustment factor (0.5-3.0, default 1.0)
+        method: Adjustment method (linear, histogram, clahe, gamma)
+        
+    Returns:
+        Original and processed images as base64 for real-time preview
+    """
+    if not image_processor:
+        raise HTTPException(status_code=503, detail="Image processor not initialized")
+    
+    try:
+        # Read uploaded image
+        contents = await file.read()
+        nparr = np.frombuffer(contents, np.uint8)
+        image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        
+        # Apply contrast adjustment
+        processed_image = image_processor.adjust_contrast(
+            image,
+            contrast=contrast,
+            method=method
+        )
+        
+        # Convert to base64 for preview
+        original_pil = Image.fromarray(image)
+        processed_pil = Image.fromarray(processed_image)
+        
+        original_buffer = io.BytesIO()
+        processed_buffer = io.BytesIO()
+        
+        original_pil.save(original_buffer, format='JPEG', quality=85)
+        processed_pil.save(processed_buffer, format='JPEG', quality=85)
+        
+        original_b64 = base64.b64encode(original_buffer.getvalue()).decode('utf-8')
+        processed_b64 = base64.b64encode(processed_buffer.getvalue()).decode('utf-8')
+        
+        logger.info(f"✅ Preprocessed image: contrast={contrast}, method={method}")
+        
+        return {
+            "image_id": str(uuid.uuid4()),
+            "original_base64": f"data:image/jpeg;base64,{original_b64}",
+            "processed_base64": f"data:image/jpeg;base64,{processed_b64}",
+            "contrast": contrast,
+            "method": method,
+            "timestamp": datetime.now()
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Preprocessing failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Preprocessing failed: {str(e)}")
+
+
 @router.post("/explain", response_model=ExplainResponse)
 async def explain_detection(
     file: UploadFile = File(...),
     methods: str = Query("gradcam", description="XAI methods to use (comma-separated): gradcam,lime,shap,ig,all"),
+    contrast: float = 1.0,
+    contrast_method: str = "linear",
     db: Session = Depends(get_db),
     # # Auth disabled,  # Auth disabled for now
 ):
@@ -360,6 +432,8 @@ async def explain_detection(
     Args:
         file: Uploaded radiographic image (JPEG, PNG)
         methods: Comma-separated list of methods (gradcam,lime,shap,ig,all)
+        contrast: Contrast adjustment factor (1.0 = no change, >1.0 = increase, <1.0 = decrease)
+        contrast_method: Method for contrast adjustment ('linear', 'histogram', 'clahe', 'gamma')
         
     Returns:
         ExplainResponse with method-specific heatmaps and consensus visualization
@@ -374,14 +448,25 @@ async def explain_detection(
                 detail="XAI explainer not initialized. Ensure classification model is loaded."
             )
         
-        # Save uploaded file temporarily
-        temp_path = EXPORTS_DIR / f"temp_{uuid.uuid4()}.jpg"
+        # Generate a single UUID for this analysis
+        image_id = str(uuid.uuid4())
+        
+        # Save uploaded file temporarily (applying contrast adjustment if needed)
+        temp_path = EXPORTS_DIR / f"temp_{image_id}.jpg"
         try:
             image_bytes = await file.read()
             image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+            
+            # Apply contrast adjustment if needed
+            if contrast != 1.0 or contrast_method != 'linear':
+                image_np = np.array(image)
+                adjusted_np = image_processor.adjust_contrast(image_np, contrast=contrast, method=contrast_method)
+                image = Image.fromarray(adjusted_np)
+                logger.info(f"Applied contrast adjustment: {contrast}x ({contrast_method})")
+            
             image.save(temp_path)
             
-            logger.info(f"Processing image for XAI explanation: {file.filename}")
+            logger.info(f"Processing image for XAI explanation: {file.filename} (ID: {image_id})")
             logger.info(f"Requested methods: {methods}")
             
             # Parse methods
@@ -473,7 +558,7 @@ async def explain_detection(
                 recommendation = explanation_result.get('recommendation', '')
             
             response = ExplainResponse(
-                image_id=str(uuid.uuid4()),
+                image_id=image_id,  # Use the generated UUID
                 explanations=explanations,
                 aggregated_heatmap=aggregated_heatmap,
                 consensus_score=consensus_score,
@@ -512,6 +597,15 @@ async def explain_detection(
                 else:
                     # No existing analysis (direct /explain call), create new one
                     has_defects = predicted_class.lower() != 'no defect'
+                    
+                    # Read and encode the original image for storage
+                    original_image_b64 = None
+                    try:
+                        with open(temp_path, 'rb') as img_file:
+                            original_image_b64 = base64.b64encode(img_file.read()).decode('utf-8')
+                    except Exception as img_err:
+                        logger.warning(f"Failed to encode image for storage: {img_err}")
+                    
                     db_analysis = Analysis(
                         image_id=response.image_id,
                         filename=file.filename or "unknown.jpg",
@@ -523,17 +617,37 @@ async def explain_detection(
                         highest_severity='high' if has_defects else None,
                         mean_confidence=confidence,
                         model_version='YOLOv8s-cls',
+                        original_image_base64=original_image_b64,
+                        image_base64=original_image_b64[:50000] if original_image_b64 and len(original_image_b64) > 50000 else original_image_b64,
                     )
                     db.add(db_analysis)
                     db.flush()  # Get the ID
                     analysis_db_id = db_analysis.id
                     logger.info(f"✅ Created new analysis: {response.image_id}")
+                    
+                    # Also create a Detection record for classification result
+                    if has_defects:
+                        # For classification, create a single detection covering whole image
+                        predicted_label = explanation_result['prediction']['class_id']
+                        detection = Detection(
+                            analysis_id=analysis_db_id,
+                            x1=0.0,
+                            y1=0.0,
+                            x2=1.0,
+                            y2=1.0,
+                            confidence=confidence,
+                            label=predicted_label,
+                            class_name=CLASS_NAMES.get(predicted_label, predicted_class),
+                            severity='high',
+                        )
+                        db.add(detection)
+                        logger.info(f"✅ Created detection: {CLASS_NAMES.get(predicted_label, predicted_class)}")
                 
-                # Create Explanation record
+                # Create Explanation record (store full heatmap, not truncated)
                 db_explanation = Explanation(
                     analysis_id=analysis_db_id,
                     method=','.join(list(explanation_result.get('methods', {}).keys()) if 'methods' in explanation_result else ['gradcam']),
-                    heatmap_base64=response.aggregated_heatmap[:1000] if response.aggregated_heatmap else None,  # Store truncated
+                    heatmap_base64=response.aggregated_heatmap if response.aggregated_heatmap else None,  # Store FULL heatmap
                     confidence_score=confidence,
                 )
                 db.add(db_explanation)
@@ -826,6 +940,48 @@ async def get_calibration_status(
     except Exception as e:
         logger.error(f"Calibration retrieval failed: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Calibration retrieval failed: {str(e)}")
+
+
+@router.post("/clear-all-data")
+async def clear_all_data(db: Session = Depends(get_db)):
+    """
+    Clear all analysis data from the database.
+    
+    ⚠️ WARNING: This deletes ALL analyses, detections, and explanations.
+    This action cannot be undone!
+    
+    Returns:
+        Dict with count of deleted records
+    """
+    try:
+        # Get counts before deletion
+        analysis_count = db.query(Analysis).count()
+        detection_count = db.query(Detection).count()
+        explanation_count = db.query(Explanation).count()
+        
+        # Delete all records (cascade will handle related records)
+        db.query(Detection).delete()
+        db.query(Explanation).delete()
+        db.query(Analysis).delete()
+        
+        db.commit()
+        
+        logger.info(f"🗑️ Cleared all data: {analysis_count} analyses, {detection_count} detections, {explanation_count} explanations")
+        
+        return {
+            "status": "success",
+            "message": "All data cleared successfully",
+            "deleted": {
+                "analyses": analysis_count,
+                "detections": detection_count,
+                "explanations": explanation_count
+            }
+        }
+        
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Failed to clear data: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to clear data: {str(e)}")
 
 
 @router.get("/health", response_model=HealthResponse)

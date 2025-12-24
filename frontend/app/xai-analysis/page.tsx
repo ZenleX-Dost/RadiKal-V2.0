@@ -12,7 +12,8 @@
 import { useState } from 'react';
 import XAIExplanations from '@/components/XAIExplanations';
 import { ExplanationResponse } from '@/types';
-import { Upload, Loader2 } from 'lucide-react';
+import { Upload, Loader2, Sliders } from 'lucide-react';
+import { apiClient } from '@/utils/api_client';
 
 export default function XAIAnalysisPage() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -20,6 +21,13 @@ export default function XAIAnalysisPage() {
   const [explanation, setExplanation] = useState<ExplanationResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  
+  // Contrast adjustment states
+  const [contrast, setContrast] = useState(1.0);
+  const [contrastMethod, setContrastMethod] = useState('clahe');
+  const [showContrastPanel, setShowContrastPanel] = useState(false);
+  const [processedPreview, setProcessedPreview] = useState<string | null>(null);
+  const [preprocessLoading, setPreprocessLoading] = useState(false);
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -36,6 +44,20 @@ export default function XAIAnalysisPage() {
     reader.readAsDataURL(file);
   };
 
+  const handlePreview = async () => {
+    if (!selectedFile) return;
+
+    setPreprocessLoading(true);
+    try {
+      const result = await apiClient.preprocessImage(selectedFile, contrast, contrastMethod);
+      setProcessedPreview(result.processed_base64);
+    } catch (err) {
+      console.error('Preview failed:', err);
+    } finally {
+      setPreprocessLoading(false);
+    }
+  };
+
   const handleAnalyze = async () => {
     if (!selectedFile) return;
 
@@ -43,19 +65,12 @@ export default function XAIAnalysisPage() {
     setError(null);
 
     try {
-      const formData = new FormData();
-      formData.append('file', selectedFile);
-
-      const response = await fetch('http://localhost:8000/api/explain', {
-        method: 'POST',
-        body: formData,
+      const result = await apiClient.getExplanations({
+        image_id: 'temp',
+        file: selectedFile,
+        contrast,
+        contrastMethod,
       });
-
-      if (!response.ok) {
-        throw new Error(`Analysis failed: ${response.statusText}`);
-      }
-
-      const result: ExplanationResponse = await response.json();
       setExplanation(result);
     } catch (err) {
       console.error('Analysis error:', err);
@@ -123,12 +138,99 @@ export default function XAIAnalysisPage() {
             )}
           </div>
 
-          {/* Image preview */}
+          {/* Image preview & Contrast adjustment */}
           {imagePreview && (
             <div className="mt-6">
-              <h3 className="text-sm font-semibold text-gray-700 mb-2">Preview</h3>
-              <div className="border-2 border-gray-300 rounded-lg overflow-hidden max-w-md">
-                <img src={imagePreview} alt="Preview" className="w-full h-auto" />
+              {/* Contrast adjustment toggle */}
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-sm font-semibold text-gray-700">Preview</h3>
+                <button
+                  onClick={() => setShowContrastPanel(!showContrastPanel)}
+                  className="flex items-center gap-2 px-3 py-1.5 text-sm border rounded-lg hover:bg-gray-50 transition-colors"
+                >
+                  <Sliders className="w-4 h-4" />
+                  {showContrastPanel ? 'Hide' : 'Adjust Contrast'}
+                </button>
+              </div>
+
+              {/* Contrast adjustment panel */}
+              {showContrastPanel && (
+                <div className="mb-4 p-4 bg-blue-50 border border-blue-200 rounded-lg space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Contrast: {contrast.toFixed(1)}x
+                    </label>
+                    <input
+                      type="range"
+                      min="0.5"
+                      max="3.0"
+                      step="0.1"
+                      value={contrast}
+                      onChange={(e) => setContrast(parseFloat(e.target.value))}
+                      className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                    />
+                    <div className="flex justify-between text-xs text-gray-500 mt-1">
+                      <span>0.5x</span>
+                      <span>1.0x (Normal)</span>
+                      <span>3.0x</span>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Method
+                    </label>
+                    <select
+                      value={contrastMethod}
+                      onChange={(e) => setContrastMethod(e.target.value)}
+                      className="w-full p-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
+                    >
+                      <option value="linear">Linear (Fast)</option>
+                      <option value="histogram">Histogram Equalization</option>
+                      <option value="clahe">CLAHE (Recommended for Radiographs)</option>
+                      <option value="gamma">Gamma Correction</option>
+                    </select>
+                  </div>
+
+                  <button
+                    onClick={handlePreview}
+                    disabled={preprocessLoading}
+                    className="w-full px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-400 transition-colors flex items-center justify-center gap-2"
+                  >
+                    {preprocessLoading ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        <span>Processing...</span>
+                      </>
+                    ) : (
+                      'Preview Adjustment'
+                    )}
+                  </button>
+                </div>
+              )}
+
+              {/* Side-by-side comparison */}
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <p className="text-xs font-medium text-gray-600 mb-2">Original</p>
+                  <div className="border-2 border-gray-300 rounded-lg overflow-hidden">
+                    <img src={imagePreview} alt="Original" className="w-full h-auto" />
+                  </div>
+                </div>
+                <div>
+                  <p className="text-xs font-medium text-gray-600 mb-2">
+                    {processedPreview ? 'Adjusted' : 'Preview (click button above)'}
+                  </p>
+                  <div className="border-2 border-gray-300 rounded-lg overflow-hidden">
+                    {processedPreview ? (
+                      <img src={processedPreview} alt="Processed" className="w-full h-auto" />
+                    ) : (
+                      <div className="bg-gray-100 aspect-video flex items-center justify-center">
+                        <span className="text-gray-400 text-sm">No preview yet</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
             </div>
           )}

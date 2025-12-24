@@ -5,23 +5,25 @@ import ImageUpload from '@/components/ImageUpload';
 import DetectionResults from '@/components/DetectionResults';
 import XAIExplanations from '@/components/XAIExplanations';
 import ExportButton from '@/components/ExportButton';
-import { apiClient } from '@/lib/api';
+import ContrastAdjuster from '@/components/ContrastAdjuster';
+import { apiClient } from '@/utils/api_client';
 import { DetectionResponse, ExplanationResponse } from '@/types';
-import { 
-  AlertCircle, 
-  Save, 
-  Microscope, 
-  Upload, 
-  Target, 
-  CheckCircle, 
-  AlertTriangle, 
-  Zap, 
-  BarChart3, 
-  XCircle, 
-  AlertOctagon, 
-  Info, 
+import {
+  AlertCircle,
+  Save,
+  Microscope,
+  Upload,
+  Target,
+  CheckCircle,
+  AlertTriangle,
+  Zap,
+  BarChart3,
+  XCircle,
+  AlertOctagon,
+  Info,
   Eye,
-  TrendingUp
+  TrendingUp,
+  Settings2
 } from 'lucide-react';
 import { useAnalysisStore } from '@/store/analysisStore';
 import { useUIStore } from '@/store/uiStore';
@@ -33,29 +35,49 @@ export default function DashboardPage() {
   const [explanationResult, setExplanationResult] = useState<ExplanationResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [uploadedImage, setUploadedImage] = useState<string | null>(null);
+  const [currentFile, setCurrentFile] = useState<File | null>(null);
   const [currentFileName, setCurrentFileName] = useState<string | null>(null);
+
+  // Contrast adjustment state
+  const [showAdjuster, setShowAdjuster] = useState(false);
+  const [contrastValue, setContrastValue] = useState(1.0);
+  const [contrastMethod, setContrastMethod] = useState('linear');
 
   const { addToHistory } = useAnalysisStore();
   const { addToast } = useUIStore();
   const { settings } = useSettingsStore();
 
-  const handleImageUpload = async (file: File) => {
-    setIsProcessing(true);
-    setError(null);
+  const handleImageUpload = (file: File) => {
+    // Reset state
     setDetectionResult(null);
     setExplanationResult(null);
+    setError(null);
     setCurrentFileName(file.name);
+    setCurrentFile(file);
+    setShowAdjuster(true); // Show adjuster first
+    setContrastValue(1.0); // Reset contrast
+    setContrastMethod('linear');
+
+    // Create preview
+    const reader = new FileReader();
+    reader.onload = () => {
+      setUploadedImage(reader.result as string);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleAnalysis = async (contrast: number, method: string) => {
+    if (!currentFile) return;
+
+    setIsProcessing(true);
+    setError(null);
+    setShowAdjuster(false);
+    setContrastValue(contrast);
+    setContrastMethod(method);
 
     try {
-      // Create preview
-      const reader = new FileReader();
-      reader.onload = () => {
-        setUploadedImage(reader.result as string);
-      };
-      reader.readAsDataURL(file);
-
-      // Step 1: Detect defects
-      const detection = await apiClient.detectDefects(file);
+      // Step 1: Detect defects with contrast params
+      const detection = await apiClient.detectDefects(currentFile, contrast, method);
       setDetectionResult(detection);
 
       addToast({
@@ -64,23 +86,24 @@ export default function DashboardPage() {
         message: `Found ${detection.detections.length} defect(s)`,
       });
 
-      // Step 2: Get explanations (classification already includes them)
+      // Step 2: Get explanations
       // The detection response now includes classification metadata
       if ((detection as any)._classification_metadata) {
-        // Use the stored file to get full explanation with heatmaps
         const explanation = await apiClient.getExplanations({
           image_id: detection.image_id,
-          file: file, // Pass file directly
+          file: currentFile,
+          contrast: contrast,
+          contrastMethod: method
         });
-        
+
         setExplanationResult(explanation);
 
         // Auto-save to history if enabled
         if (settings.autoSaveAnalyses && uploadedImage) {
-          saveToHistory(file.name, uploadedImage, detection, explanation);
+          saveToHistory(currentFile.name, uploadedImage, detection, explanation);
         }
       } else if (settings.autoSaveAnalyses && uploadedImage) {
-        saveToHistory(file.name, uploadedImage, detection);
+        saveToHistory(currentFile.name, uploadedImage, detection);
       }
     } catch (err: any) {
       const errorMessage = err.response?.data?.detail || err.message || 'An error occurred';
@@ -90,6 +113,8 @@ export default function DashboardPage() {
         title: 'Detection Failed',
         message: errorMessage,
       });
+      // Show adjuster again on error so user can retry
+      setShowAdjuster(true);
     } finally {
       setIsProcessing(false);
     }
@@ -171,7 +196,7 @@ export default function DashboardPage() {
                 <div>
                   <p className="text-sm font-medium text-gray-600 dark:text-gray-400 uppercase tracking-wide">Avg Confidence</p>
                   <p className="text-3xl font-bold text-gray-900 dark:text-white mt-2">
-                    {detectionResult.detections.length > 0 
+                    {detectionResult.detections.length > 0
                       ? (detectionResult.detections.reduce((sum, d) => sum + d.confidence, 0) / detectionResult.detections.length * 100).toFixed(1)
                       : '0'}%
                   </p>
@@ -274,31 +299,57 @@ export default function DashboardPage() {
           </div>
         )}
 
-        {/* Upload section */}
-        <div className="bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6 mb-8 border border-gray-200 dark:border-gray-700">
-          <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-2 flex items-center gap-3">
-            <Upload className="w-8 h-8 text-blue-600 dark:text-blue-400" />
-            Image Upload & Analysis
-          </h2>
-          <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
-            Upload a radiographic weld image for AI-powered defect detection
-          </p>
-          <ImageUpload onUpload={handleImageUpload} isUploading={isProcessing} />
-          
-          {isProcessing && (
-            <div className="mt-6 bg-blue-50 dark:bg-blue-900/20 rounded-lg p-6 border-2 border-blue-200 dark:border-blue-800">
-              <div className="flex items-center justify-center space-x-3 mb-3">
-                <div className="w-4 h-4 bg-blue-600 dark:bg-blue-400 rounded-full animate-bounce" style={{animationDelay: '0ms'}}></div>
-                <div className="w-4 h-4 bg-blue-600 dark:bg-blue-400 rounded-full animate-bounce" style={{animationDelay: '150ms'}}></div>
-                <div className="w-4 h-4 bg-blue-600 dark:bg-blue-400 rounded-full animate-bounce" style={{animationDelay: '300ms'}}></div>
+        {/* Upload section - Only show if not adjusting and no results yet (or processing) */}
+        {(!showAdjuster && !detectionResult) && (
+          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6 mb-8 border border-gray-200 dark:border-gray-700">
+            <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-2 flex items-center gap-3">
+              <Upload className="w-8 h-8 text-blue-600 dark:text-blue-400" />
+              Image Upload & Analysis
+            </h2>
+            <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
+              Upload a radiographic weld image for AI-powered defect detection
+            </p>
+            <ImageUpload onUpload={handleImageUpload} isUploading={isProcessing} />
+
+            {isProcessing && (
+              <div className="mt-6 bg-blue-50 dark:bg-blue-900/20 rounded-lg p-6 border-2 border-blue-200 dark:border-blue-800">
+                <div className="flex items-center justify-center space-x-3 mb-3">
+                  <div className="w-4 h-4 bg-blue-600 dark:bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
+                  <div className="w-4 h-4 bg-blue-600 dark:bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
+                  <div className="w-4 h-4 bg-blue-600 dark:bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
+                </div>
+                <p className="text-center text-lg font-semibold text-blue-900 dark:text-blue-200">AI Analysis in Progress...</p>
+                <p className="text-center text-sm text-blue-700 dark:text-blue-400 mt-2">
+                  Running YOLOv8s defect detection model {contrastValue !== 1.0 ? `with ${contrastValue}x contrast` : ''}
+                </p>
               </div>
-              <p className="text-center text-lg font-semibold text-blue-900 dark:text-blue-200">AI Analysis in Progress...</p>
-              <p className="text-center text-sm text-blue-700 dark:text-blue-400 mt-2">
-                Running YOLOv8s defect detection model
-              </p>
+            )}
+          </div>
+        )}
+
+        {/* Contrast Adjuster */}
+        {showAdjuster && uploadedImage && (
+          <div className="mb-8 animate-slide-up">
+            <div className="flex items-center gap-2 mb-4">
+              <Settings2 className="w-6 h-6 text-blue-600 dark:text-blue-400" />
+              <h2 className="text-2xl font-bold text-gray-900 dark:text-white">Enhance Image Quality</h2>
             </div>
-          )}
-        </div>
+            <p className="text-gray-600 dark:text-gray-400 mb-4">
+              Adjust the image contrast to help the AI detect subtle defects like cracks and porosity.
+            </p>
+            <ContrastAdjuster
+              imageSrc={uploadedImage}
+              initialContrast={contrastValue}
+              initialMethod={contrastMethod}
+              onApply={handleAnalysis}
+              onCancel={() => {
+                setShowAdjuster(false);
+                setUploadedImage(null);
+                setCurrentFile(null);
+              }}
+            />
+          </div>
+        )}
 
         {/* Error display */}
         {error && (
@@ -307,7 +358,7 @@ export default function DashboardPage() {
             <div className="flex-1">
               <h3 className="font-bold text-red-900 dark:text-red-200 text-xl mb-2">Error Occurred</h3>
               <p className="text-red-800 dark:text-red-300 text-base leading-relaxed">{error}</p>
-              <button 
+              <button
                 onClick={() => setError(null)}
                 className="mt-3 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg font-medium transition-colors text-sm"
               >
@@ -368,14 +419,14 @@ export default function DashboardPage() {
                   2: 'CR', // Cracks
                   3: 'ND', // No Defect
                 };
-                
+
                 const fullNames: Record<number, string> = {
                   0: 'Lack of Penetration',
                   1: 'Porosity',
                   2: 'Cracks',
                   3: 'No Defect',
                 };
-                
+
                 return {
                   detection_id: `det-${idx}`,
                   bbox: [det.x1, det.y1, det.x2, det.y2] as [number, number, number, number],

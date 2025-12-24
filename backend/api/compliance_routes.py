@@ -5,19 +5,23 @@ Endpoints for regulatory compliance and certification.
 """
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime
 import logging
+import uuid
 
 from db import get_db
+from db.models import ComplianceCheck, Analysis
 from core.compliance.severity_classifier import (
     SeverityClassifier,
     ComplianceChecker,
     WeldingStandard,
     ComplianceStatus,
 )
+from core.compliance.certificate_generator import ComplianceCertificateGenerator
 # from api.middleware import get_current_user  # TODO: Enable authentication
 
 logger = logging.getLogger(__name__)
@@ -27,10 +31,23 @@ router = APIRouter(prefix="/api/xai-qc/compliance", tags=["Compliance"])
 
 class ComplianceCheckRequest(BaseModel):
     defect_type: str
-    confidence: float
+    confidence: float = 1.0
     region_data: Optional[dict] = None
+    length_mm: Optional[float] = None
+    width_mm: Optional[float] = None
+    depth_mm: Optional[float] = None
+    density_percent: Optional[float] = None
+    location: Optional[str] = None
+    material_type: Optional[str] = None
     material_thickness: Optional[float] = None
     standard: WeldingStandard = WeldingStandard.AWS_D1_1
+    analysis_id: Optional[int] = None
+    inspector_name: Optional[str] = None
+
+
+class CertificateGenerationRequest(BaseModel):
+    compliance_check_id: int
+    inspector_name: Optional[str] = None
 
 
 class ComplianceReportRequest(BaseModel):
@@ -56,14 +73,25 @@ class ComplianceCertificate(BaseModel):
 @router.post("/check")
 async def check_compliance(
     request: ComplianceCheckRequest,
+    db: Session = Depends(get_db),
 ):
     """
-    Check if a defect meets compliance standards.
+    Check if a defect meets compliance standards and store the result.
     
     Returns severity classification and acceptance criteria.
     """
     try:
         classifier = SeverityClassifier(request.standard)
+        
+        # Build region_data from individual measurements if not provided
+        if not request.region_data and (request.length_mm or request.width_mm or request.depth_mm):
+            request.region_data = {
+                "length_mm": request.length_mm,
+                "width_mm": request.width_mm,
+                "depth_mm": request.depth_mm,
+                "density_percent": request.density_percent,
+                "location": request.location,
+            }
         
         result = classifier.classify_severity(
             defect_type=request.defect_type,
@@ -72,10 +100,41 @@ async def check_compliance(
             material_thickness=request.material_thickness,
         )
         
+        # Store compliance check in database
+        compliance_check = ComplianceCheck(
+            analysis_id=request.analysis_id,
+            inspector_name=request.inspector_name,
+            defect_type=request.defect_type,
+            length_mm=request.length_mm,
+            width_mm=request.width_mm,
+            depth_mm=request.depth_mm,
+            density_percent=request.density_percent,
+            location=request.location,
+            material_type=request.material_type,
+            material_thickness=request.material_thickness,
+            standard_code=request.standard.value,
+            standard_name=f"{request.standard.value} Standard",
+            severity=result.get("severity", "unknown"),
+            compliance_status=result.get("compliance_status", "unknown"),
+            pass_fail=result.get("pass_fail", False),
+            recommended_action=result.get("recommended_action", ""),
+            reasons=result.get("reasons", []),
+        )
+        
+        db.add(compliance_check)
+        db.commit()
+        db.refresh(compliance_check)
+        
+        # Add check_id to result
+        result["check_id"] = compliance_check.id
+        
+        logger.info(f"Compliance check completed and stored: ID {compliance_check.id}")
+        
         return result
         
     except Exception as e:
         logger.error(f"Compliance check failed: {e}", exc_info=True)
+        db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -184,82 +243,150 @@ async def get_acceptance_criteria(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/generate-certificate", response_model=ComplianceCertificate)
+@router.post("/generate-certificate")
 async def generate_compliance_certificate(
-    request: ComplianceReportRequest,
+    request: CertificateGenerationRequest,
     db: Session = Depends(get_db),
-    # current_user = Depends(get_current_user),  # TODO: Enable authentication
 ):
     """
-    Generate compliance certificate for an analysis.
+    Generate PDF compliance certificate for a completed compliance check.
     
     Creates ISO 9001 compliant documentation.
     """
     try:
-        from db import Analysis
+        # Fetch the compliance check
+        check = db.query(ComplianceCheck).filter(
+            ComplianceCheck.id == request.compliance_check_id
+        ).first()
         
-        # Verify analysis exists
-        analysis = db.query(Analysis).filter(Analysis.id == request.analysis_id).first()
-        if not analysis:
-            raise HTTPException(status_code=404, detail="Analysis not found")
+        if not check:
+            raise HTTPException(status_code=404, detail="Compliance check not found")
         
-        # Generate certificate
-        certificate = ComplianceCertificate(
-            certificate_id=f"CERT-{datetime.now().strftime('%Y%m%d-%H%M%S')}",
-            analysis_id=request.analysis_id,
-            standard=request.standard.value,
-            compliance_status=ComplianceStatus.PASS.value,  # TODO: Calculate from analysis
-            inspector_name=request.inspector_name or current_user.get('name', 'Unknown'),
-            inspector_signature=request.inspector_signature,
-            issue_date=datetime.now(),
-            expiry_date=None,  # Certificates typically don't expire
-            notes=request.notes,
+        # Generate unique certificate ID
+        certificate_id = f"CERT-{datetime.now().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
+        
+        # Initialize certificate generator
+        generator = ComplianceCertificateGenerator()
+        
+        # Prepare defect measurements
+        defect_measurements = {
+            "length_mm": check.length_mm,
+            "width_mm": check.width_mm,
+            "depth_mm": check.depth_mm,
+            "density_percent": check.density_percent,
+            "location": check.location,
+        }
+        
+        # Generate PDF
+        pdf_path = generator.generate_certificate(
+            certificate_id=certificate_id,
+            analysis_id=str(check.analysis_id) if check.analysis_id else None,
+            defect_type=check.defect_type,
+            defect_measurements=defect_measurements,
+            material_type=check.material_type,
+            material_thickness=check.material_thickness,
+            standard_code=check.standard_code,
+            standard_name=check.standard_name or f"{check.standard_code} Standard",
+            compliance_status=check.compliance_status,
+            severity=check.severity,
+            pass_fail=check.pass_fail,
+            recommended_action=check.recommended_action or "No action specified",
+            reasons=check.reasons or [],
+            inspector_name=request.inspector_name or check.inspector_name or "Unknown Inspector",
         )
         
-        logger.info(f"Generated compliance certificate: {certificate.certificate_id}")
+        # Update check with certificate info
+        check.certificate_id = certificate_id
+        check.certificate_path = pdf_path
+        db.commit()
         
-        # TODO: Store certificate in database
-        # TODO: Generate PDF certificate
+        logger.info(f"Generated compliance certificate: {certificate_id}")
         
-        return certificate
+        return {
+            "certificate_id": certificate_id,
+            "check_id": check.id,
+            "pdf_path": pdf_path,
+            "download_url": f"/api/xai-qc/compliance/download-certificate/{certificate_id}",
+        }
         
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Certificate generation failed: {e}", exc_info=True)
+        db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/audit-trail/{analysis_id}")
-async def get_audit_trail(
-    analysis_id: str,
+@router.get("/download-certificate/{certificate_id}")
+async def download_certificate(
+    certificate_id: str,
     db: Session = Depends(get_db),
 ):
     """
-    Get complete audit trail for an analysis.
-    
-    Returns all compliance checks, reviews, and certifications.
+    Download a generated compliance certificate PDF.
     """
     try:
-        # TODO: Query audit records from database
-        audit_trail = {
-            "analysis_id": analysis_id,
-            "events": [
+        # Find the compliance check with this certificate
+        check = db.query(ComplianceCheck).filter(
+            ComplianceCheck.certificate_id == certificate_id
+        ).first()
+        
+        if not check or not check.certificate_path:
+            raise HTTPException(status_code=404, detail="Certificate not found")
+        
+        # Return PDF file
+        return FileResponse(
+            path=check.certificate_path,
+            media_type="application/pdf",
+            filename=f"{certificate_id}.pdf",
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Certificate download failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/history")
+async def get_compliance_history(
+    limit: int = 50,
+    skip: int = 0,
+    db: Session = Depends(get_db),
+):
+    """
+    Get compliance check history (audit trail).
+    
+    Returns recent compliance checks with pagination.
+    """
+    try:
+        total = db.query(ComplianceCheck).count()
+        
+        checks = db.query(ComplianceCheck).order_by(
+            ComplianceCheck.created_at.desc()
+        ).offset(skip).limit(limit).all()
+        
+        return {
+            "total": total,
+            "checks": [
                 {
-                    "timestamp": datetime.now().isoformat(),
-                    "event_type": "analysis_completed",
-                    "user": "system",
-                    "details": "Automated XAI analysis completed",
-                },
-                # Add more events from database
+                    "id": check.id,
+                    "analysis_id": check.analysis_id,
+                    "inspector_name": check.inspector_name,
+                    "defect_type": check.defect_type,
+                    "material_type": check.material_type,
+                    "material_thickness": check.material_thickness,
+                    "standard_code": check.standard_code,
+                    "severity": check.severity,
+                    "compliance_status": check.compliance_status,
+                    "pass_fail": check.pass_fail,
+                    "certificate_id": check.certificate_id,
+                    "created_at": check.created_at.isoformat(),
+                }
+                for check in checks
             ],
-            "compliance_checks": [],
-            "reviews": [],
-            "certificates": [],
         }
         
-        return audit_trail
-        
     except Exception as e:
-        logger.error(f"Failed to get audit trail: {e}", exc_info=True)
+        logger.error(f"Failed to get compliance history: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))

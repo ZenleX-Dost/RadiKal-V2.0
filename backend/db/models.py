@@ -24,6 +24,10 @@ class Analysis(Base):
     filename = Column(String, nullable=False)
     upload_timestamp = Column(DateTime, default=datetime.utcnow, nullable=False)
     
+    # Image storage (base64 encoded)
+    image_base64 = Column(String)  # Compressed preview for thumbnails
+    original_image_base64 = Column(String)  # Full resolution original
+    
     # Image metadata
     image_width = Column(Integer)
     image_height = Column(Integer)
@@ -127,19 +131,58 @@ class SystemMetrics(Base):
     period_end = Column(DateTime)
 
 
+class User(Base):
+    """
+    User model for authentication and role-based access.
+    
+    Roles:
+    - manager: Full access, can manage users and view all reports
+    - project_chief: Can review analyses and receive escalated issues
+    - technician: Primary user, performs analyses and can request second opinions
+    """
+    __tablename__ = "users"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String, unique=True, nullable=False, index=True)
+    email = Column(String, unique=True, index=True)
+    password_hash = Column(String, nullable=False)  # bcrypt hashed password
+    full_name = Column(String, nullable=False)
+    role = Column(String, nullable=False, index=True)  # 'manager', 'project_chief', 'technician'
+    
+    # Status
+    is_active = Column(Boolean, default=True, index=True)
+    last_login = Column(DateTime)
+    
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Relationships - reviews requested by this user
+    reviews_submitted = relationship("Review", foreign_keys="Review.reviewer_id", back_populates="reviewer")
+    reviews_requested = relationship("Review", foreign_keys="Review.requested_by_id", back_populates="requester")
+
+
 class Review(Base):
     """
     Collaborative review system - inspector reviews of analyses.
+    Supports second opinion requests between technicians and project chiefs.
     """
     __tablename__ = "reviews"
     
     id = Column(Integer, primary_key=True, index=True)
     analysis_id = Column(Integer, ForeignKey("analyses.id", ondelete="CASCADE"), nullable=False, index=True)
-    reviewer_id = Column(String, nullable=False)
+    
+    # Reviewer who submitted this review
+    reviewer_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    
+    # For second opinion requests - who requested and target reviewer
+    requested_by_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    target_reviewer_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
     
     # Review decision
-    status = Column(String, nullable=False, index=True)  # approved, rejected, needs_second_opinion
+    status = Column(String, nullable=False, index=True)  # approved, rejected, needs_second_opinion, pending_review
     comments = Column(String)
+    request_notes = Column(String)  # Notes when requesting second opinion
     
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
@@ -148,6 +191,59 @@ class Review(Base):
     # Relationships
     analysis = relationship("Analysis", backref="reviews")
     annotations = relationship("ReviewAnnotation", back_populates="review", cascade="all, delete-orphan")
+    reviewer = relationship("User", foreign_keys=[reviewer_id], back_populates="reviews_submitted")
+    requester = relationship("User", foreign_keys=[requested_by_id], back_populates="reviews_requested")
+    target_reviewer = relationship("User", foreign_keys=[target_reviewer_id])
+
+
+class ComplianceCheck(Base):
+    """
+    Compliance check record - stores each compliance verification.
+    """
+    __tablename__ = "compliance_checks"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    
+    # Link to analysis (optional - can check manually too)
+    analysis_id = Column(Integer, ForeignKey("analyses.id", ondelete="SET NULL"), nullable=True, index=True)
+    
+    # User who performed the check
+    inspector_name = Column(String, nullable=True)
+    inspector_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    
+    # Defect details
+    defect_type = Column(String, nullable=False)
+    length_mm = Column(Float, nullable=True)
+    width_mm = Column(Float, nullable=True)
+    depth_mm = Column(Float, nullable=True)
+    density_percent = Column(Float, nullable=True)
+    location = Column(String, nullable=True)
+    
+    # Material details
+    material_type = Column(String, nullable=True)  # Carbon Steel, Stainless Steel, etc.
+    material_thickness = Column(Float, nullable=True)  # in mm
+    
+    # Standard used
+    standard_code = Column(String, nullable=False, index=True)  # AWS D1.1, ASME, etc.
+    standard_name = Column(String, nullable=True)
+    
+    # Compliance result
+    severity = Column(String, nullable=False)  # critical, major, minor
+    compliance_status = Column(String, nullable=False)  # pass, fail
+    pass_fail = Column(Boolean, nullable=False)
+    recommended_action = Column(String, nullable=True)
+    reasons = Column(JSON, nullable=True)  # List of reasons
+    
+    # Certificate
+    certificate_id = Column(String, unique=True, index=True, nullable=True)
+    certificate_path = Column(String, nullable=True)  # Path to generated PDF
+    
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    
+    # Relationships
+    analysis = relationship("Analysis", backref="compliance_checks")
+    inspector = relationship("User", backref="compliance_checks")
 
 
 class ReviewAnnotation(Base):

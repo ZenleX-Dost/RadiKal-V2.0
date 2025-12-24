@@ -11,7 +11,7 @@ Provides endpoints for:
 from datetime import datetime, timedelta
 from typing import List, Optional
 from fastapi import APIRouter, Depends, Query, HTTPException
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func, and_, or_
 import logging
 
@@ -60,8 +60,10 @@ async def get_defect_trends(
         else:
             end = datetime.now()
         
-        # Query analyses in date range
-        query = db.query(Analysis).filter(
+        # Query analyses in date range with detections eagerly loaded
+        query = db.query(Analysis).options(
+            joinedload(Analysis.detections)
+        ).filter(
             and_(
                 Analysis.upload_timestamp >= start,
                 Analysis.upload_timestamp <= end,
@@ -216,12 +218,22 @@ def _aggregate_by_period(analyses, group_by, start, end):
             defect_count = sum(1 for a in period_analyses if a.has_defects)
             total = len(period_analyses)
             
+            # Get defect types for this period
+            period_defect_types = {}
+            for analysis in period_analyses:
+                if analysis.detections:
+                    for det in analysis.detections:
+                        class_name = det.class_name
+                        if class_name not in ['ND', 'No Defect']:
+                            period_defect_types[class_name] = period_defect_types.get(class_name, 0) + 1
+            
             trends.append(DefectTrendData(
                 period=current.strftime('%Y-%m-%d') if group_by == 'day' else current.strftime('%Y-%m'),
                 total_inspections=total,
                 defect_count=defect_count,
                 defect_rate=(defect_count / total * 100) if total > 0 else 0,
                 avg_confidence=sum(a.mean_confidence or 0 for a in period_analyses) / total if total > 0 else 0,
+                defect_types=period_defect_types,
             ))
         
         current = next_period
@@ -231,7 +243,9 @@ def _aggregate_by_period(analyses, group_by, start, end):
 
 def _get_period_metrics(db: Session, start: datetime, end: datetime):
     """Calculate metrics for a time period."""
-    analyses = db.query(Analysis).filter(
+    analyses = db.query(Analysis).options(
+        joinedload(Analysis.detections)
+    ).filter(
         and_(
             Analysis.upload_timestamp >= start,
             Analysis.upload_timestamp <= end,

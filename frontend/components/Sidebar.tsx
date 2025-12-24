@@ -8,6 +8,7 @@ import {
   BarChart3, 
   History, 
   Settings,
+  Users,
   X 
 } from 'lucide-react';
 
@@ -21,8 +22,10 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose }) => {
 
   const navItems = [
     { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
-    { href: '/metrics', label: 'Metrics', icon: BarChart3 },
+    { href: '/xai-analysis', label: 'XAI Analysis', icon: BarChart3 },
+    { href: '/review-queue', label: 'Review Queue', icon: Users },
     { href: '/history', label: 'History', icon: History },
+    { href: '/metrics', label: 'Metrics', icon: BarChart3 },
     { href: '/settings', label: 'Settings', icon: Settings },
   ];
 
