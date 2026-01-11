@@ -24,6 +24,7 @@ from pathlib import Path
 from api.routes import router, initialize_models
 from api import analytics_routes, review_routes, compliance_routes, custom_defects_routes, user_routes
 from api import health_routes
+from api import role_routes  # Role-based access control routes
 from db import init_db
 from core.middleware import (
     rate_limit_middleware,
@@ -163,6 +164,7 @@ app.include_router(review_routes.router)
 app.include_router(compliance_routes.router)
 app.include_router(custom_defects_routes.router)
 app.include_router(user_routes.router)
+app.include_router(role_routes.router)  # Role-based access control
 
 # Startup event: Initialize models and database
 @app.on_event("startup")

@@ -277,6 +277,7 @@ class AnalysisHistoryItem(BaseModel):
     mean_confidence: float
     mean_uncertainty: float
     status: str
+    thumbnail: Optional[str] = None  # Base64 encoded thumbnail image
 
 
 class AnalysisHistoryResponse(BaseModel):
@@ -549,3 +550,217 @@ class ModelRollbackRequest(BaseModel):
     """Request to rollback to a previous model version."""
     target_version_id: int
     reason: str = Field(..., min_length=1, max_length=500)
+
+
+# ============================================================================
+# Role-Based Access Control Schemas
+# ============================================================================
+
+class UserRoleEnum(str, Enum):
+    """User roles in the RadiKal system."""
+    RADIKAL_USER = "radikal_user"
+    CHIEF = "chief"
+    MANAGER = "manager"
+
+
+class ChangeRequestStatus(str, Enum):
+    """Status values for change requests."""
+    PENDING = "pending"
+    IN_PROGRESS = "in_progress"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
+
+
+class ChangeRequestPriority(str, Enum):
+    """Priority levels for change requests."""
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    URGENT = "urgent"
+
+
+class CommentType(str, Enum):
+    """Types of comments on analyses."""
+    GENERAL = "general"
+    FEEDBACK = "feedback"
+    CORRECTION = "correction"
+    APPROVAL = "approval"
+    CONCERN = "concern"
+
+
+class ActivityType(str, Enum):
+    """Types of user activities."""
+    LOGIN = "login"
+    LOGOUT = "logout"
+    ANALYSIS_CREATED = "analysis_created"
+    ANALYSIS_VIEWED = "analysis_viewed"
+    COMMENT_ADDED = "comment_added"
+    CHANGE_REQUEST_CREATED = "change_request_created"
+    CHANGE_REQUEST_COMPLETED = "change_request_completed"
+    REVIEW_SUBMITTED = "review_submitted"
+
+
+# === Change Request Schemas ===
+
+class ChangeRequestCreate(BaseModel):
+    """Schema for creating a change request (Chief only)."""
+    analysis_id: int
+    assigned_to_id: int
+    title: str = Field(..., min_length=5, max_length=200)
+    description: str = Field(..., min_length=10, max_length=2000)
+    reason: Optional[str] = Field(None, max_length=1000)
+    priority: ChangeRequestPriority = ChangeRequestPriority.MEDIUM
+    due_date: Optional[datetime] = None
+
+
+class ChangeRequestUpdate(BaseModel):
+    """Schema for updating a change request."""
+    status: Optional[ChangeRequestStatus] = None
+    resolution_notes: Optional[str] = Field(None, max_length=2000)
+    resolved_analysis_id: Optional[int] = None
+
+
+class ChangeRequestResponse(BaseModel):
+    """Response schema for a change request."""
+    model_config = ConfigDict(from_attributes=True)
+    
+    id: int
+    analysis_id: int
+    requested_by_id: int
+    requested_by_name: Optional[str] = None
+    assigned_to_id: int
+    assigned_to_name: Optional[str] = None
+    title: str
+    description: str
+    reason: Optional[str]
+    priority: str
+    status: str
+    resolution_notes: Optional[str]
+    resolved_analysis_id: Optional[int]
+    created_at: datetime
+    updated_at: datetime
+    due_date: Optional[datetime]
+    completed_at: Optional[datetime]
+
+
+class ChangeRequestListResponse(BaseModel):
+    """Response schema for list of change requests."""
+    items: List[ChangeRequestResponse]
+    total: int
+    page: int
+    page_size: int
+
+
+# === Comment Schemas ===
+
+class CommentCreate(BaseModel):
+    """Schema for creating a comment on an analysis (Chief only)."""
+    analysis_id: int
+    content: str = Field(..., min_length=1, max_length=5000)
+    comment_type: CommentType = CommentType.GENERAL
+    region_x: Optional[float] = None
+    region_y: Optional[float] = None
+    region_width: Optional[float] = None
+    region_height: Optional[float] = None
+    is_internal: bool = False
+
+
+class CommentResponse(BaseModel):
+    """Response schema for a comment."""
+    model_config = ConfigDict(from_attributes=True)
+    
+    id: int
+    analysis_id: int
+    author_id: int
+    author_name: Optional[str] = None
+    content: str
+    comment_type: str
+    region_x: Optional[float]
+    region_y: Optional[float]
+    region_width: Optional[float]
+    region_height: Optional[float]
+    is_internal: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+# === Activity Schemas ===
+
+class ActivityLogResponse(BaseModel):
+    """Response schema for activity log entry."""
+    model_config = ConfigDict(from_attributes=True)
+    
+    id: int
+    user_id: int
+    user_name: Optional[str] = None
+    action_type: str
+    action_description: Optional[str]
+    analysis_id: Optional[int]
+    related_entity_type: Optional[str]
+    related_entity_id: Optional[int]
+    created_at: datetime
+
+
+class UserActivitySummaryResponse(BaseModel):
+    """Response schema for user activity summary."""
+    model_config = ConfigDict(from_attributes=True)
+    
+    user_id: int
+    user_name: Optional[str] = None
+    period_type: str
+    period_start: datetime
+    period_end: datetime
+    analyses_performed: int
+    analyses_reviewed: int
+    change_requests_received: int
+    change_requests_completed: int
+    comments_made: int
+    login_count: int
+    defects_found: int
+    average_confidence: float
+    average_processing_time_ms: float
+
+
+class UserActivityChartData(BaseModel):
+    """Chart data for user activity visualization."""
+    labels: List[str]  # Date labels
+    datasets: List[Dict[str, Any]]  # Chart.js compatible datasets
+
+
+# === User Statistics Schemas ===
+
+class RadikalUserStats(BaseModel):
+    """Statistics for a RadikalUser."""
+    user_id: int
+    user_name: str
+    total_analyses: int
+    analyses_this_week: int
+    analyses_this_month: int
+    pending_change_requests: int
+    completed_change_requests: int
+    average_confidence: float
+    defects_found: int
+    last_activity: Optional[datetime]
+
+
+class ChiefDashboardStats(BaseModel):
+    """Dashboard statistics for a Chief."""
+    supervised_users_count: int
+    total_analyses_by_team: int
+    pending_reviews: int
+    change_requests_sent: int
+    change_requests_completed: int
+    recent_activity: List[ActivityLogResponse]
+
+
+class ManagerDashboardStats(BaseModel):
+    """Dashboard statistics for a Manager."""
+    total_users: int
+    total_radikal_users: int
+    total_chiefs: int
+    total_analyses: int
+    pending_change_requests: int
+    completed_change_requests: int
+    analyses_this_week: int
+    analyses_this_month: int
+    top_performers: List[RadikalUserStats]

@@ -10,6 +10,7 @@ from db.models import (
     Explanation, 
     SystemMetrics,
     User,
+    UserRole,
     Review,
     ReviewAnnotation,
     ComplianceCertificate,
@@ -19,7 +20,12 @@ from db.models import (
     ModelVersion,
     TrainingDataset,
     TrainingJob,
-    ActiveLearningQueue
+    ActiveLearningQueue,
+    # New role-based models
+    ChangeRequest,
+    AnalysisComment,
+    ActivityLog,
+    UserActivitySummary,
 )
 
 __all__ = [
@@ -34,6 +40,7 @@ __all__ = [
     "Explanation",
     "SystemMetrics",
     "User",
+    "UserRole",
     "Review",
     "ReviewAnnotation",
     "ComplianceCertificate",
@@ -44,4 +51,9 @@ __all__ = [
     "TrainingDataset",
     "TrainingJob",
     "ActiveLearningQueue",
+    # New role-based models
+    "ChangeRequest",
+    "AnalysisComment",
+    "ActivityLog",
+    "UserActivitySummary",
 ]

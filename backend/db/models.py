@@ -45,9 +45,15 @@ class Analysis(Base):
     model_version = Column(String)
     status = Column(String, default="completed")  # completed, failed, processing
     
+    # User tracking - who performed this analysis
+    performed_by = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    
     # Relationships
     detections = relationship("Detection", back_populates="analysis", cascade="all, delete-orphan")
     explanations = relationship("Explanation", back_populates="analysis", cascade="all, delete-orphan")
+    performed_by_user = relationship("User", back_populates="analyses_performed", foreign_keys=[performed_by])
+    comments = relationship("AnalysisComment", back_populates="analysis", cascade="all, delete-orphan")
+    change_requests = relationship("ChangeRequest", back_populates="analysis", cascade="all, delete-orphan", foreign_keys="ChangeRequest.analysis_id")
 
 
 class Detection(Base):
@@ -131,14 +137,55 @@ class SystemMetrics(Base):
     period_end = Column(DateTime)
 
 
+class UserRole:
+    """User role constants for RadiKal system."""
+    RADIKAL_USER = "radikal_user"  # Can use models, perform analyses, view other users' results
+    CHIEF = "chief"  # Supervises RadikalUsers, reviews, requests changes, adds comments
+    MANAGER = "manager"  # Views history, analysis results, activity diagrams, change request list
+    
+    @classmethod
+    def all_roles(cls):
+        return [cls.RADIKAL_USER, cls.CHIEF, cls.MANAGER]
+    
+    @classmethod
+    def can_use_models(cls, role: str) -> bool:
+        """Check if role can use classification/analysis models."""
+        return role == cls.RADIKAL_USER
+    
+    @classmethod
+    def can_review(cls, role: str) -> bool:
+        """Check if role can review analyses."""
+        return role == cls.CHIEF
+    
+    @classmethod
+    def can_request_changes(cls, role: str) -> bool:
+        """Check if role can request changes to analyses."""
+        return role == cls.CHIEF
+    
+    @classmethod
+    def can_add_comments(cls, role: str) -> bool:
+        """Check if role can add comments to analyses."""
+        return role in [cls.CHIEF, cls.MANAGER]
+    
+    @classmethod
+    def can_view_all_users(cls, role: str) -> bool:
+        """Check if role can view all users and their activity."""
+        return role in [cls.CHIEF, cls.MANAGER]
+    
+    @classmethod
+    def can_view_change_requests(cls, role: str) -> bool:
+        """Check if role can view change requests list."""
+        return role == cls.MANAGER
+
+
 class User(Base):
     """
     User model for authentication and role-based access.
     
     Roles:
-    - manager: Full access, can manage users and view all reports
-    - project_chief: Can review analyses and receive escalated issues
-    - technician: Primary user, performs analyses and can request second opinions
+    - radikal_user: Can use models, perform classification/segmentation, view other RadikalUsers' results
+    - chief: Supervises RadikalUsers, reviews analyses, requests changes, adds comments, views activity charts
+    - manager: Views history, analysis results, activity diagrams, sees change requests from chiefs
     """
     __tablename__ = "users"
     
@@ -147,7 +194,10 @@ class User(Base):
     email = Column(String, unique=True, index=True)
     password_hash = Column(String, nullable=False)  # bcrypt hashed password
     full_name = Column(String, nullable=False)
-    role = Column(String, nullable=False, index=True)  # 'manager', 'project_chief', 'technician'
+    role = Column(String, nullable=False, index=True)  # 'radikal_user', 'chief', 'manager'
+    
+    # Supervisor assignment (for RadikalUsers)
+    supervisor_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
     
     # Status
     is_active = Column(Boolean, default=True, index=True)
@@ -160,6 +210,22 @@ class User(Base):
     # Relationships - reviews requested by this user
     reviews_submitted = relationship("Review", foreign_keys="Review.reviewer_id", back_populates="reviewer")
     reviews_requested = relationship("Review", foreign_keys="Review.requested_by_id", back_populates="requester")
+    
+    # Relationships - supervisor hierarchy
+    supervisor = relationship("User", remote_side="User.id", backref="supervised_users", foreign_keys=[supervisor_id])
+    
+    # Relationships - analyses performed by this user
+    analyses_performed = relationship("Analysis", back_populates="performed_by_user", foreign_keys="Analysis.performed_by")
+    
+    # Relationships - comments added by this user
+    comments = relationship("AnalysisComment", back_populates="author")
+    
+    # Relationships - change requests
+    change_requests_created = relationship("ChangeRequest", foreign_keys="ChangeRequest.requested_by_id", back_populates="requested_by")
+    change_requests_assigned = relationship("ChangeRequest", foreign_keys="ChangeRequest.assigned_to_id", back_populates="assigned_to")
+    
+    # Relationships - activity logs
+    activity_logs = relationship("ActivityLog", back_populates="user")
 
 
 class Review(Base):
@@ -562,3 +628,157 @@ class ActiveLearningQueue(Base):
     
     # Relationship
     analysis = relationship("Analysis", backref="active_learning_suggestions")
+
+
+# ============================================================================
+# NEW ROLE-BASED ACCESS CONTROL MODELS
+# ============================================================================
+
+class ChangeRequest(Base):
+    """
+    Change requests created by Chiefs for RadikalUsers to redo/modify analyses.
+    Managers can view a list of all change requests.
+    """
+    __tablename__ = "change_requests"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    
+    # Link to the analysis that needs changes
+    analysis_id = Column(Integer, ForeignKey("analyses.id", ondelete="CASCADE"), nullable=False, index=True)
+    
+    # Who requested the change (Chief)
+    requested_by_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    
+    # Who should make the change (RadikalUser)
+    assigned_to_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    
+    # Request details
+    title = Column(String, nullable=False)
+    description = Column(String, nullable=False)  # What needs to be changed
+    reason = Column(String)  # Why the change is needed
+    priority = Column(String, default="medium", index=True)  # low, medium, high, urgent
+    
+    # Status tracking
+    status = Column(String, default="pending", nullable=False, index=True)  # pending, in_progress, completed, cancelled
+    
+    # Resolution
+    resolution_notes = Column(String)  # Notes from RadikalUser when completing
+    resolved_analysis_id = Column(Integer, ForeignKey("analyses.id"), nullable=True)  # Link to new analysis if redone
+    
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    due_date = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+    
+    # Relationships
+    analysis = relationship("Analysis", back_populates="change_requests", foreign_keys=[analysis_id])
+    requested_by = relationship("User", back_populates="change_requests_created", foreign_keys=[requested_by_id])
+    assigned_to = relationship("User", back_populates="change_requests_assigned", foreign_keys=[assigned_to_id])
+    resolved_analysis = relationship("Analysis", foreign_keys=[resolved_analysis_id])
+
+
+class AnalysisComment(Base):
+    """
+    Comments on analyses - Chiefs can add comments for feedback.
+    """
+    __tablename__ = "analysis_comments"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    
+    # Link to analysis
+    analysis_id = Column(Integer, ForeignKey("analyses.id", ondelete="CASCADE"), nullable=False, index=True)
+    
+    # Author of the comment
+    author_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    
+    # Comment content
+    content = Column(String, nullable=False)
+    comment_type = Column(String, default="general")  # general, feedback, correction, approval, concern
+    
+    # Optional: Link to specific region of image
+    region_x = Column(Float, nullable=True)
+    region_y = Column(Float, nullable=True)
+    region_width = Column(Float, nullable=True)
+    region_height = Column(Float, nullable=True)
+    
+    # Visibility
+    is_internal = Column(Boolean, default=False)  # If True, only Chiefs and Managers can see
+    
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Relationships
+    analysis = relationship("Analysis", back_populates="comments")
+    author = relationship("User", back_populates="comments")
+
+
+class ActivityLog(Base):
+    """
+    Activity tracking for users - used by Chiefs and Managers to monitor RadikalUser activity.
+    """
+    __tablename__ = "activity_logs"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    
+    # User who performed the action
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    
+    # Activity details
+    action_type = Column(String, nullable=False, index=True)  # login, logout, analysis_created, analysis_viewed, etc.
+    action_description = Column(String)
+    
+    # Related entities (optional)
+    analysis_id = Column(Integer, ForeignKey("analyses.id", ondelete="SET NULL"), nullable=True, index=True)
+    related_entity_type = Column(String, nullable=True)  # analysis, review, change_request, etc.
+    related_entity_id = Column(Integer, nullable=True)
+    
+    # Additional context (renamed from 'metadata' which is reserved)
+    extra_data = Column(JSON, nullable=True)  # Any additional context
+    ip_address = Column(String, nullable=True)
+    user_agent = Column(String, nullable=True)
+    
+    # Timestamp
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    
+    # Relationships
+    user = relationship("User", back_populates="activity_logs")
+    analysis = relationship("Analysis", backref="activity_logs")
+
+
+class UserActivitySummary(Base):
+    """
+    Daily/Weekly aggregated activity summary for dashboards.
+    Pre-computed for performance on activity charts.
+    """
+    __tablename__ = "user_activity_summaries"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    
+    # User
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    
+    # Time period
+    period_type = Column(String, nullable=False, index=True)  # daily, weekly, monthly
+    period_start = Column(DateTime, nullable=False, index=True)
+    period_end = Column(DateTime, nullable=False)
+    
+    # Activity counts
+    analyses_performed = Column(Integer, default=0)
+    analyses_reviewed = Column(Integer, default=0)
+    change_requests_received = Column(Integer, default=0)
+    change_requests_completed = Column(Integer, default=0)
+    comments_made = Column(Integer, default=0)
+    login_count = Column(Integer, default=0)
+    
+    # Quality metrics
+    defects_found = Column(Integer, default=0)
+    average_confidence = Column(Float, default=0.0)
+    average_processing_time_ms = Column(Float, default=0.0)
+    
+    # Computed at
+    computed_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    
+    # Relationships
+    user = relationship("User", backref="activity_summaries")

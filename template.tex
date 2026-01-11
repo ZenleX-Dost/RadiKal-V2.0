@@ -1,0 +1,273 @@
+\documentclass[12pt,a4paper]{report}
+
+% =========================================================================
+%                         1. PACKAGES & SETUP
+% =========================================================================
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[english]{babel} % Change to 'french' if needed
+\usepackage{geometry}       % For margins
+\usepackage{graphicx}       % For images
+\usepackage{xcolor}         % For colors
+\usepackage{titlesec}       % For custom chapter titles
+\usepackage{eso-pic}        % For background images
+\usepackage{float}          % For [H] figure placement
+\usepackage{subcaption}     % For subfigures
+\usepackage{hyperref}       % For clickable links
+\usepackage{booktabs}       % For nicer tables
+
+% --- Code Highlighting ---
+% NOTE: 'minted' requires Python and the -shell-escape flag. 
+% If you don't have this set up, keep this commented and use 'listings' or 'verbatim'.
+%\usepackage{minted} 
+%\definecolor{bg}{rgb}{0.95,0.95,0.95} 
+
+% =========================================================================
+%                  2. CUSTOM COMMANDS (Replacing the .cls file)
+% =========================================================================
+
+% --- Variables for the Title Page ---
+\newcommand{\titre}[1]{\def\thetitle{#1}}
+\newcommand{\UE}[1]{\def\theue{#1}}
+\newcommand{\sujet}[1]{\def\thesujet{#1}}
+\newcommand{\enseignant}[1]{\def\theenseignant{#1}}
+\newcommand{\eleves}[1]{\def\theeleves{#1}}
+\newcommand{\jury}[1]{\def\thejury{#1}}
+
+% --- Margin Setup Command ---
+\newcommand{\fairemarges}{
+    \geometry{top=2.5cm, bottom=2.5cm, left=2.5cm, right=2.5cm}
+}
+
+% --- Title Page Layout ---
+\newcommand{\fairepagedegarde}{
+    \begin{titlepage}
+        \thispagestyle{empty}
+        \centering
+        % LOGO PLACEHOLDER
+        % \includegraphics[width=0.4\textwidth]{images/logo.png} 
+        \vspace*{1cm}
+        
+        {\scshape\LARGE \theue \par}
+        \vspace{0.5cm}
+        {\scshape\Large \thesujet \par}
+        
+        \vspace{2.5cm}
+        
+        \rule{\linewidth}{0.5mm} \\[0.4cm]
+        {\huge\bfseries \thetitle \par}
+        \rule{\linewidth}{0.5mm} \\[1.5cm]
+        
+        \vspace{1cm}
+        
+        \begin{minipage}{0.45\textwidth}
+            \begin{flushleft} \large
+                \emph{Author:}\\
+                \theeleves
+            \end{flushleft}
+        \end{minipage}
+        \hfill
+        \begin{minipage}{0.45\textwidth}
+            \begin{flushright} \large
+                \emph{Supervisors:} \\
+                \theenseignant
+            \end{flushright}
+        \end{minipage}
+
+        \vspace{2cm}
+        
+        \ifx\thejury\empty \else
+            \vfill
+            {\large \textbf{Jury:} \\ \thejury}
+        \fi
+
+        \vfill
+        {\large \today\par} 
+    \end{titlepage}
+}
+
+% =========================================================================
+%                  3. CHAPTER STYLING & BACKGROUND
+% =========================================================================
+
+% --- Background Image Command ---
+\newcommand{\chapterbackground}{%
+  \AddToShipoutPictureBG*{%
+    \AtPageLowerLeft{%
+      % UNCOMMENT THE LINE BELOW ONLY IF YOU HAVE THE IMAGE
+      % \includegraphics[width=\paperwidth,height=\paperheight,opacity=0.1]{images/backgroundcap.png}%
+    }%
+  }%
+}
+
+% --- Chapter Title Formatting ---
+\titleformat{\chapter}[display]
+  {\normalfont\bfseries\LARGE}
+  {\mdseries\fontsize{60pt}{72pt}\selectfont\chaptertitlename\ \thechapter}
+  {25pt}
+  {\chapterbackground}
+
+\titleformat{name=\chapter,numberless}
+  {\normalfont\bfseries\LARGE} 
+  {}{0pt}
+  {\chapterbackground}
+
+
+% =========================================================================
+%                             4. DOCUMENT START
+% =========================================================================
+\begin{document}
+
+% --- Define Report Info Here ---
+\titre{Project Title Goes Here}
+\UE{Industrial Engineering \& Data Science}
+\sujet{End of Year Project}
+\enseignant{Prof. Supervisor 1 \\ Prof. Supervisor 2}
+\eleves{Student Name}
+\jury{Prof. Jury Member}
+
+% --- Initialization ---
+\fairepagedegarde
+\pagenumbering{roman} 
+\setcounter{page}{1}
+\fairemarges 
+
+% =========================================================================
+%                          PRELIMINARY PAGES
+% =========================================================================
+
+% --- Dedication ---
+\cleardoublepage
+\thispagestyle{empty}
+\vspace*{4cm}
+\begin{center} \textbf{\Huge Dedication} \end{center}
+\vspace{2cm}
+\begin{center} \Large
+To my family, for their support...
+\end{center}
+
+% --- Acknowledgements ---
+\newpage
+\thispagestyle{empty}
+\vspace*{4cm}
+\begin{center} \textbf{\Huge Acknowledgements} \end{center}
+\vspace{2cm}
+\begin{center} \Large
+I would like to thank my supervisors...
+\end{center}
+
+% --- Abstract ---
+\chapter*{Abstract}
+\addcontentsline{toc}{chapter}{Abstract}
+This report details the development of... [Your abstract here]
+
+\newline \newline \hline \vspace{0.5cm}
+{\large \textbf{Keywords}: } Python, Automation, Data Science, Quality Control.
+\vspace{0.5cm} \hline
+\newpage
+
+% --- List of Abbreviations ---
+\chapter*{List of Abbreviations}
+\addcontentsline{toc}{chapter}{List of Abbreviations}
+\begin{tabular}{ll}
+    \textbf{API} & Application Programming Interface \\
+    \textbf{GUI} & Graphical User Interface \\
+    \textbf{PCP} & Part Control Plan \\
+\end{tabular}
+\newpage
+
+% --- Glossary ---
+\chapter*{Glossary}
+\addcontentsline{toc}{chapter}{Glossary}
+\begin{description}
+    \item[Term 1] Definition of term 1.
+    \item[Term 2] Definition of term 2.
+\end{description}
+\newpage
+
+% --- TOC ---
+\tabledematieres % French command mapping isn't standard, using standard below
+\tableofcontents
+\listoffigures
+\listoftables
+\newpage
+
+% =========================================================================
+%                              MAIN CONTENT
+% =========================================================================
+\pagenumbering{arabic} 
+\setcounter{page}{1}
+
+% --- Introduction ---
+\chapter*{General Introduction}
+\addcontentsline{toc}{chapter}{General Introduction}
+Introduction text goes here...
+
+\chapter{Project Context}
+\section{Host Organization}
+Description of the company...
+\section{Problem Statement}
+Description of the problem...
+
+\chapter{Technical Implementation}
+\section{Architecture}
+The system follows a 3-tier architecture...
+
+\section{Code Implementation}
+% Example of code. 
+% NOTE: If you uncommented 'minted' in the preamble, you can use \begin{minted}{python}
+\begin{verbatim}
+def analyze_data(data):
+    # This is a code block placeholder
+    return data.process()
+\end{verbatim}
+
+\chapter{Results and Discussion}
+\section{Performance}
+The tool reduced time by 99\%...
+
+\begin{table}[H]
+    \centering
+    \caption{Time Comparison}
+    \begin{tabular}{lcc}
+        \toprule
+        \textbf{Task} & \textbf{Manual} & \textbf{Automated} \\
+        \midrule
+        Analysis & 2 hours & 5 mins \\
+        Reporting & 1 hour & Instant \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+\chapter*{General Conclusion}
+\addcontentsline{toc}{chapter}{General Conclusion}
+We successfully achieved the objectives...
+
+% =========================================================================
+%                             BIBLIOGRAPHY
+% =========================================================================
+% You can use a .bib file, or write references manually here for a single file solution
+\begin{thebibliography}{9}
+    \bibitem{zheng2020smart}
+    Zheng, P. et al. (2020). \textit{Smart manufacturing systems for Industry 4.0}.
+    
+    \bibitem{pcpcontext}
+    Automotive Industry Action Group. (2008). \textit{Advanced Product Quality Planning}.
+\end{thebibliography}
+\addcontentsline{toc}{chapter}{Bibliography}
+
+% =========================================================================
+%                               ANNEXES
+% =========================================================================
+\chapter*{Annexes}
+\addcontentsline{toc}{chapter}{Annexes}
+\markboth{Annexes}{Annexes}
+
+\section*{Annex A: Screenshots}
+\begin{figure}[H]
+    \centering
+    % \includegraphics[width=0.8\textwidth]{images/screenshot.png}
+    \caption{Screenshot placeholder}
+\end{figure}
+
+\end{document}

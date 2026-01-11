@@ -3,7 +3,8 @@ User Management and Authentication API Routes
 
 Provides endpoints for:
 - User registration and login
-- User listing by role (for second opinion requests)
+- User listing by role (RadikalUser, Chief, Manager)
+- Role-based access control
 - Authentication via JWT tokens
 """
 
@@ -18,7 +19,7 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, EmailStr
 
-from db import get_db, User
+from db import get_db, User, UserRole
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +36,8 @@ class UserCreate(BaseModel):
     email: Optional[str] = None
     password: str
     full_name: str
-    role: str  # 'manager', 'project_chief', 'technician'
+    role: str  # 'radikal_user', 'chief', 'manager'
+    supervisor_id: Optional[int] = None  # Required for radikal_user
 
 
 class UserLogin(BaseModel):
@@ -51,6 +53,7 @@ class UserResponse(BaseModel):
     role: str
     is_active: bool
     created_at: datetime
+    supervisor_id: Optional[int] = None
     
     class Config:
         from_attributes = True
@@ -61,6 +64,7 @@ class UserListItem(BaseModel):
     username: str
     full_name: str
     role: str
+    supervisor_id: Optional[int] = None
     
     class Config:
         from_attributes = True
@@ -71,6 +75,7 @@ class LoginResponse(BaseModel):
     user: Optional[UserResponse]
     session_token: Optional[str]
     message: str
+    permissions: Optional[dict] = None  # Role-based permissions
 
 
 # === Helper Functions ===
@@ -103,15 +108,31 @@ async def register_user(
     """
     Register a new user.
     
-    Roles: manager, project_chief, technician
+    Roles:
+    - radikal_user: Can use models, perform analyses, view other RadikalUsers' results
+    - chief: Supervises RadikalUsers, reviews analyses, requests changes, adds comments
+    - manager: Views history, analysis results, activity diagrams, sees change requests
     """
     # Validate role
-    valid_roles = ['manager', 'project_chief', 'technician']
+    valid_roles = UserRole.all_roles()
     if user_data.role not in valid_roles:
         raise HTTPException(
             status_code=400,
             detail=f"Invalid role. Must be one of: {', '.join(valid_roles)}"
         )
+    
+    # RadikalUsers must have a supervisor (Chief)
+    if user_data.role == UserRole.RADIKAL_USER and user_data.supervisor_id:
+        supervisor = db.query(User).filter(
+            User.id == user_data.supervisor_id,
+            User.role == UserRole.CHIEF,
+            User.is_active == True
+        ).first()
+        if not supervisor:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid supervisor_id. Must be an active Chief."
+            )
     
     # Check if username exists
     existing = db.query(User).filter(User.username == user_data.username).first()
@@ -131,6 +152,7 @@ async def register_user(
         password_hash=hash_password(user_data.password),
         full_name=user_data.full_name,
         role=user_data.role,
+        supervisor_id=user_data.supervisor_id,
         is_active=True,
     )
     
@@ -168,6 +190,7 @@ async def login(
     active_sessions[session_token] = {
         "user_id": user.id,
         "username": user.username,
+        "role": user.role,
         "created_at": datetime.utcnow(),
     }
     
@@ -175,13 +198,24 @@ async def login(
     user.last_login = datetime.utcnow()
     db.commit()
     
-    logger.info(f"✅ User logged in: {user.username}")
+    logger.info(f"✅ User logged in: {user.username} (role: {user.role})")
+    
+    # Build permissions based on role
+    permissions = {
+        "can_use_models": UserRole.can_use_models(user.role),
+        "can_review": UserRole.can_review(user.role),
+        "can_request_changes": UserRole.can_request_changes(user.role),
+        "can_add_comments": UserRole.can_add_comments(user.role),
+        "can_view_all_users": UserRole.can_view_all_users(user.role),
+        "can_view_change_requests": UserRole.can_view_change_requests(user.role),
+    }
     
     return LoginResponse(
         success=True,
         user=user,
         session_token=session_token,
-        message="Login successful"
+        message="Login successful",
+        permissions=permissions
     )
 
 
@@ -206,6 +240,49 @@ async def get_current_user(
     return user
 
 
+@router.get("/by-email/{email}")
+async def get_user_by_email(
+    email: str,
+    db: Session = Depends(get_db),
+):
+    """
+    Get user by email address.
+    
+    Used by the frontend to get role information for Supabase-authenticated users.
+    """
+    user = db.query(User).filter(User.email == email, User.is_active == True).first()
+    if not user:
+        # Return a default response for users not in the local database
+        return {
+            "id": None,
+            "username": None,
+            "email": email,
+            "full_name": None,
+            "role": "radikal_user",  # Default role
+            "is_active": True,
+            "supervisor_id": None,
+            "supervisor_name": None,
+        }
+    
+    # Get supervisor name if exists
+    supervisor_name = None
+    if user.supervisor_id:
+        supervisor = db.query(User).filter(User.id == user.supervisor_id).first()
+        if supervisor:
+            supervisor_name = supervisor.full_name
+    
+    return {
+        "id": user.id,
+        "username": user.username,
+        "email": user.email,
+        "full_name": user.full_name,
+        "role": user.role,
+        "is_active": user.is_active,
+        "supervisor_id": user.supervisor_id,
+        "supervisor_name": supervisor_name,
+    }
+
+
 @router.get("/", response_model=List[UserListItem])
 async def list_users(
     role: Optional[str] = None,
@@ -216,8 +293,8 @@ async def list_users(
     List all users, optionally filtered by role.
     
     Used for:
-    - Displaying user list for managers
-    - Selecting reviewers for second opinions
+    - Displaying user list for managers and chiefs
+    - Selecting reviewers
     """
     query = db.query(User)
     
@@ -231,40 +308,110 @@ async def list_users(
     return users
 
 
-@router.get("/technicians", response_model=List[UserListItem])
-async def list_technicians(
+@router.get("/radikal-users", response_model=List[UserListItem])
+async def list_radikal_users(
     exclude_user_id: Optional[int] = None,
+    supervisor_id: Optional[int] = None,
     db: Session = Depends(get_db),
 ):
     """
-    List all active technicians (for second opinion requests).
+    List all active RadikalUsers.
     
-    Excludes the requesting user if exclude_user_id is provided.
+    Args:
+        exclude_user_id: Exclude this user from the list
+        supervisor_id: Filter by supervisor (Chief) ID
     """
     query = db.query(User).filter(
-        User.role == "technician",
+        User.role == UserRole.RADIKAL_USER,
         User.is_active == True
     )
     
     if exclude_user_id:
         query = query.filter(User.id != exclude_user_id)
     
+    if supervisor_id:
+        query = query.filter(User.supervisor_id == supervisor_id)
+    
     return query.order_by(User.full_name).all()
 
 
-@router.get("/project-chiefs", response_model=List[UserListItem])
-async def list_project_chiefs(
+@router.get("/chiefs", response_model=List[UserListItem])
+async def list_chiefs(
     db: Session = Depends(get_db),
 ):
     """
-    List all active project chiefs (for escalating to senior reviewers).
+    List all active Chiefs.
     """
     users = db.query(User).filter(
-        User.role == "project_chief",
+        User.role == UserRole.CHIEF,
         User.is_active == True
     ).order_by(User.full_name).all()
     
     return users
+
+
+@router.get("/managers", response_model=List[UserListItem])
+async def list_managers(
+    db: Session = Depends(get_db),
+):
+    """
+    List all active Managers.
+    """
+    users = db.query(User).filter(
+        User.role == UserRole.MANAGER,
+        User.is_active == True
+    ).order_by(User.full_name).all()
+    
+    return users
+
+
+@router.get("/supervised-by/{chief_id}", response_model=List[UserListItem])
+async def list_supervised_users(
+    chief_id: int,
+    db: Session = Depends(get_db),
+):
+    """
+    List all RadikalUsers supervised by a specific Chief.
+    """
+    # Verify the chief exists
+    chief = db.query(User).filter(
+        User.id == chief_id,
+        User.role == UserRole.CHIEF
+    ).first()
+    
+    if not chief:
+        raise HTTPException(status_code=404, detail="Chief not found")
+    
+    users = db.query(User).filter(
+        User.supervisor_id == chief_id,
+        User.is_active == True
+    ).order_by(User.full_name).all()
+    
+    return users
+
+
+# Legacy endpoints for backward compatibility
+@router.get("/technicians", response_model=List[UserListItem])
+async def list_technicians_legacy(
+    exclude_user_id: Optional[int] = None,
+    db: Session = Depends(get_db),
+):
+    """
+    [DEPRECATED] Use /radikal-users instead.
+    List all active RadikalUsers (for backward compatibility).
+    """
+    return await list_radikal_users(exclude_user_id=exclude_user_id, db=db)
+
+
+@router.get("/project-chiefs", response_model=List[UserListItem])
+async def list_project_chiefs_legacy(
+    db: Session = Depends(get_db),
+):
+    """
+    [DEPRECATED] Use /chiefs instead.
+    List all active Chiefs (for backward compatibility).
+    """
+    return await list_chiefs(db=db)
 
 
 @router.get("/reviewers", response_model=List[UserListItem])
@@ -273,13 +420,10 @@ async def list_available_reviewers(
     db: Session = Depends(get_db),
 ):
     """
-    List all users who can receive second opinion requests.
-    
-    Returns both technicians and project chiefs (excluding current user).
-    This is the main endpoint for the "Request Second Opinion" feature.
+    List all users who can review analyses (Chiefs only).
     """
     query = db.query(User).filter(
-        User.role.in_(["technician", "project_chief"]),
+        User.role == UserRole.CHIEF,
         User.is_active == True
     )
     

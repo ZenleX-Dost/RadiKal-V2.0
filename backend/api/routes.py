@@ -652,9 +652,20 @@ async def explain_detection(
                     
                     # Read and encode the original image for storage
                     original_image_b64 = None
+                    thumbnail_b64 = None
                     try:
                         with open(temp_path, 'rb') as img_file:
                             original_image_b64 = base64.b64encode(img_file.read()).decode('utf-8')
+                        
+                        # Create proper thumbnail (resized to 400px width)
+                        pil_img = Image.open(temp_path)
+                        thumb_width = 400
+                        thumb_height = int(pil_img.height * (thumb_width / pil_img.width))
+                        pil_img.thumbnail((thumb_width, thumb_height), Image.Resampling.LANCZOS)
+                        thumb_buffer = io.BytesIO()
+                        pil_img.save(thumb_buffer, format='JPEG', quality=75)
+                        thumb_buffer.seek(0)
+                        thumbnail_b64 = base64.b64encode(thumb_buffer.read()).decode('utf-8')
                     except Exception as img_err:
                         logger.warning(f"Failed to encode image for storage: {img_err}")
                     
@@ -670,7 +681,7 @@ async def explain_detection(
                         mean_confidence=confidence,
                         model_version='YOLOv8s-cls',
                         original_image_base64=original_image_b64,
-                        image_base64=original_image_b64[:50000] if original_image_b64 and len(original_image_b64) > 50000 else original_image_b64,
+                        image_base64=thumbnail_b64,  # Proper thumbnail
                     )
                     db.add(db_analysis)
                     db.flush()  # Get the ID
@@ -944,6 +955,7 @@ async def get_analysis_history(
                 mean_confidence=analysis.mean_confidence or 0.0,
                 mean_uncertainty=analysis.mean_uncertainty or 0.0,
                 status=analysis.status,
+                thumbnail=analysis.image_base64,  # Include thumbnail for preview
             )
             for analysis in analyses
         ]
@@ -964,6 +976,77 @@ async def get_analysis_history(
     except Exception as e:
         logger.error(f"History retrieval failed: {str(e)}")
         raise HTTPException(status_code=500, detail=f"History retrieval failed: {str(e)}")
+
+
+@router.get("/analysis/{image_id}")
+async def get_analysis_detail(
+    image_id: str,
+    db: Session = Depends(get_db),
+):
+    """
+    Get detailed analysis by image_id.
+    
+    Returns full analysis data including detections, explanations, and images.
+    """
+    try:
+        analysis = db.query(Analysis).filter(Analysis.image_id == image_id).first()
+        
+        if not analysis:
+            raise HTTPException(status_code=404, detail=f"Analysis not found: {image_id}")
+        
+        # Get detections
+        detections = []
+        for det in analysis.detections:
+            detections.append({
+                "id": det.id,
+                "x1": det.x1,
+                "y1": det.y1,
+                "x2": det.x2,
+                "y2": det.y2,
+                "confidence": det.confidence,
+                "label": det.label,
+                "class_name": det.class_name,
+                "severity": det.severity,
+            })
+        
+        # Get explanations (heatmaps)
+        explanations = []
+        for exp in analysis.explanations:
+            explanations.append({
+                "id": exp.id,
+                "method": exp.method,
+                "confidence_score": exp.confidence_score,
+                "heatmap_base64": exp.heatmap_base64,
+                "created_at": exp.created_at.isoformat() if exp.created_at else None,
+            })
+        
+        return {
+            "id": analysis.id,
+            "image_id": analysis.image_id,
+            "filename": analysis.filename,
+            "timestamp": analysis.upload_timestamp.isoformat() if analysis.upload_timestamp else None,
+            "image_base64": analysis.image_base64,
+            "original_image_base64": analysis.original_image_base64,
+            "image_width": analysis.image_width,
+            "image_height": analysis.image_height,
+            "num_detections": analysis.num_detections,
+            "has_defects": analysis.has_defects,
+            "highest_severity": analysis.highest_severity,
+            "mean_confidence": analysis.mean_confidence,
+            "mean_uncertainty": analysis.mean_uncertainty,
+            "inference_time_ms": analysis.inference_time_ms,
+            "model_version": analysis.model_version,
+            "status": analysis.status,
+            "performed_by": analysis.performed_by,
+            "detections": detections,
+            "explanations": explanations,
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get analysis detail: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to get analysis: {str(e)}")
 
 
 @router.get("/metrics", response_model=MetricsResponse)
