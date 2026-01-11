@@ -56,29 +56,57 @@ class LIMEExplainer:
         Returns:
             Prediction function that returns class probabilities.
         """
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        
         def predict(images):
+            # LIME passes images as (N, H, W, C) in range [0, 1]
             batch = []
             for img in images:
+                # Ensure proper shape (C, H, W)
                 if len(img.shape) == 3:
-                    img = np.transpose(img, (2, 0, 1))
+                    if img.shape[2] == 3:  # (H, W, C) -> (C, H, W)
+                        img = np.transpose(img, (2, 0, 1))
+                # Ensure float and proper range
+                if img.max() <= 1.0:
+                    img = img * 255.0
                 batch.append(img)
             
-            batch = np.array(batch)
-            batch_tensor = torch.from_numpy(batch).float()
+            batch = np.array(batch, dtype=np.float32)
             
+            # Process one at a time to avoid batch dimension issues with YOLOv8
+            all_probs = []
             with torch.no_grad():
-                output = model(batch_tensor)
-                
-                if isinstance(output, dict):
-                    logits = output.get('scores', output.get('logits', output.get('pred', None)))
-                else:
-                    logits = output
-                
-                if logits is None:
-                    raise ValueError("Cannot extract logits from model output")
-                
-                probs = torch.softmax(logits, dim=-1)
-                return probs.cpu().numpy()
+                for i in range(len(batch)):
+                    single = torch.from_numpy(batch[i:i+1]).float().to(device)
+                    
+                    # Resize if needed for YOLOv8 (expects 224x224)
+                    if single.shape[-1] != 224 or single.shape[-2] != 224:
+                        single = torch.nn.functional.interpolate(
+                            single, size=(224, 224), mode='bilinear', align_corners=False
+                        )
+                    
+                    output = model(single)
+                    
+                    # Handle different output types from YOLOv8
+                    if isinstance(output, tuple):
+                        # YOLOv8 may return tuple (logits, features)
+                        logits = output[0]
+                    elif isinstance(output, dict):
+                        logits = output.get('scores', output.get('logits', output.get('pred', None)))
+                    else:
+                        logits = output
+                    
+                    if logits is None:
+                        raise ValueError("Cannot extract logits from model output")
+                    
+                    # Ensure logits is a tensor
+                    if not isinstance(logits, torch.Tensor):
+                        logits = torch.tensor(logits)
+                    
+                    probs = torch.softmax(logits, dim=-1)
+                    all_probs.append(probs.cpu().numpy())
+            
+            return np.vstack(all_probs)
         
         return predict
     
@@ -228,3 +256,73 @@ class LIMEExplainer:
             LIME heatmap.
         """
         return self.generate_heatmap(image, target_class)
+    
+    def explain(
+        self,
+        image: np.ndarray,
+        target_class: Optional[int] = None,
+        num_samples: Optional[int] = None,
+        num_features: Optional[int] = None
+    ) -> Tuple[np.ndarray, dict]:
+        """Generate LIME explanation with overlay visualization.
+        
+        Args:
+            image: Input image (H, W, C) in BGR format.
+            target_class: Target class index.
+            num_samples: Number of samples (overrides default).
+            num_features: Number of features (overrides default).
+            
+        Returns:
+            Tuple of (overlay_image, metadata).
+        """
+        # Save original settings
+        orig_samples = self.num_samples
+        orig_features = self.num_features
+        
+        if num_samples:
+            self.num_samples = num_samples
+        if num_features:
+            self.num_features = num_features
+        
+        # Generate heatmap
+        heatmap = self.generate_heatmap(image, target_class, normalize=True)
+        
+        # Create overlay
+        import cv2
+        heatmap_colored = cv2.applyColorMap((heatmap * 255).astype(np.uint8), cv2.COLORMAP_JET)
+        overlay = cv2.addWeighted(image, 0.6, heatmap_colored, 0.4, 0)
+        
+        # Restore settings
+        self.num_samples = orig_samples
+        self.num_features = orig_features
+        
+        metadata = {
+            'method': 'lime',
+            'num_samples': num_samples or orig_samples,
+            'num_features': num_features or orig_features,
+            'explanation_score': float(heatmap.max())
+        }
+        
+        return overlay, metadata
+    
+    def visualize(
+        self,
+        explanation_data: np.ndarray,
+        original_image: np.ndarray
+    ) -> np.ndarray:
+        """Visualize LIME explanation.
+        
+        Args:
+            explanation_data: Heatmap or attribution data.
+            original_image: Original image.
+            
+        Returns:
+            Visualization as BGR image.
+        """
+        import cv2
+        if explanation_data.max() <= 1.0:
+            explanation_data = (explanation_data * 255).astype(np.uint8)
+        
+        heatmap_colored = cv2.applyColorMap(explanation_data, cv2.COLORMAP_JET)
+        overlay = cv2.addWeighted(original_image, 0.6, heatmap_colored, 0.4, 0)
+        return overlay

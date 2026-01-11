@@ -18,21 +18,55 @@ from passlib.context import CryptContext
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 import logging
+import os
+import secrets
 
 from db import get_db, User
 
-try:
-    from core.config import settings
-    SECRET_KEY = settings.SECRET_KEY
-    ALGORITHM = settings.JWT_ALGORITHM
-    ACCESS_TOKEN_EXPIRE_MINUTES = settings.ACCESS_TOKEN_EXPIRE_MINUTES
-except:
-    # Fallback for development
-    SECRET_KEY = "dev-secret-key-change-in-production"
-    ALGORITHM = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES = 30
-
 logger = logging.getLogger(__name__)
+
+# Secure configuration loading
+def _get_secret_key() -> str:
+    """Get JWT secret key securely."""
+    # Try environment variable first
+    secret = os.getenv("JWT_SECRET_KEY") or os.getenv("JWT_SECRET")
+    
+    if secret and secret not in [
+        "dev-secret-key-change-in-production",
+        "radikal-dev-secret-change-in-production",
+        "your-secret-key-change-in-production",
+        "changeme",
+        "secret"
+    ]:
+        return secret
+    
+    # Try config module
+    try:
+        from core.config import settings
+        if hasattr(settings, 'SECRET_KEY') and settings.SECRET_KEY:
+            return settings.SECRET_KEY
+    except ImportError:
+        pass
+    
+    # In development, generate a random key (will change on restart)
+    env = os.getenv("ENVIRONMENT", "development")
+    if env == "production":
+        raise RuntimeError(
+            "SECURITY ERROR: JWT_SECRET_KEY must be set in production! "
+            "Set the JWT_SECRET_KEY environment variable with a secure value. "
+            "Generate with: python -c \"import secrets; print(secrets.token_urlsafe(64))\""
+        )
+    
+    # Development fallback - generate random key with warning
+    logger.warning(
+        "[SECURITY] Using randomly generated JWT secret. "
+        "Set JWT_SECRET_KEY environment variable for persistent sessions."
+    )
+    return secrets.token_urlsafe(64)
+
+SECRET_KEY = _get_secret_key()
+ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
 
 # Password hashing
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")

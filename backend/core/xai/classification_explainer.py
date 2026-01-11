@@ -18,11 +18,37 @@ from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont
 
 from core.xai.grad_cam_classifier import YOLOv8ClassifierGradCAM
-from core.xai.lime_explainer import LIMEExplainer
-from core.xai.shap_explainer import SHAPExplainer
-from core.xai.integrated_gradients import IntegratedGradientsExplainer
-from core.xai.aggregator import XAIAggregator, AggregationMethod
 from core.models.yolo_classifier import YOLOClassifier
+
+# Optional XAI methods - may not be available on all systems
+try:
+    from core.xai.lime_explainer import LIMEExplainer
+    LIME_AVAILABLE = True
+except ImportError:
+    LIMEExplainer = None
+    LIME_AVAILABLE = False
+
+try:
+    from core.xai.shap_explainer import SHAPExplainer
+    SHAP_AVAILABLE = True
+except ImportError:
+    SHAPExplainer = None
+    SHAP_AVAILABLE = False
+
+try:
+    from core.xai.integrated_gradients import IntegratedGradientsExplainer
+    IG_AVAILABLE = True
+except ImportError:
+    IntegratedGradientsExplainer = None
+    IG_AVAILABLE = False
+
+try:
+    from core.xai.aggregator import XAIAggregator, AggregationMethod
+    AGGREGATOR_AVAILABLE = True
+except ImportError:
+    XAIAggregator = None
+    AggregationMethod = None
+    AGGREGATOR_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
@@ -77,44 +103,55 @@ class ClassificationExplainer:
         # Initialize additional XAI methods (lazy loading to save memory)
         self._lime = None
         self._shap = None
-        self._ig = None
-        self._aggregator = XAIAggregator(method=AggregationMethod.MEAN)
+        self._aggregator = XAIAggregator(method=AggregationMethod.MEAN) if AGGREGATOR_AVAILABLE else None
         
-        logger.info("ClassificationExplainer initialized with Grad-CAM (LIME/SHAP/IG available)")
+        available_methods = ["Grad-CAM"]
+        if LIME_AVAILABLE:
+            available_methods.append("LIME")
+        if SHAP_AVAILABLE:
+            available_methods.append("SHAP")
+        logger.info(f"ClassificationExplainer initialized. Available methods: {', '.join(available_methods)}")
     
     @property
-    def lime(self) -> LIMEExplainer:
+    def lime(self) -> Optional['LIMEExplainer']:
         """Lazy load LIME explainer."""
+        if not LIME_AVAILABLE:
+            logger.warning("LIME not available - sklearn/lime dependencies missing")
+            return None
         if self._lime is None:
             logger.info("Initializing LIME explainer...")
-            self._lime = LIMEExplainer(
-                self.classifier.model,
-                num_samples=500,  # Lower for faster inference
-                num_features=10
-            )
+            try:
+                # Pass the PyTorch model directly for proper batch handling
+                pytorch_model = self.gradcam.pytorch_model
+                self._lime = LIMEExplainer(
+                    pytorch_model,
+                    num_samples=500,  # Lower for faster inference
+                    num_features=10
+                )
+            except Exception as e:
+                logger.error(f"Failed to initialize LIME explainer: {e}")
+                return None
         return self._lime
     
     @property
-    def shap_explainer(self) -> SHAPExplainer:
+    def shap_explainer(self) -> Optional['SHAPExplainer']:
         """Lazy load SHAP explainer."""
+        if not SHAP_AVAILABLE:
+            logger.warning("SHAP not available - shap dependency missing")
+            return None
         if self._shap is None:
             logger.info("Initializing SHAP explainer...")
-            self._shap = SHAPExplainer(
-                self.classifier.model,
-                num_background=20  # Lower for faster inference
-            )
+            try:
+                # Pass the PyTorch model directly, not the YOLO wrapper
+                pytorch_model = self.gradcam.pytorch_model
+                self._shap = SHAPExplainer(
+                    pytorch_model,
+                    num_background=20  # Lower for faster inference
+                )
+            except Exception as e:
+                logger.error(f"Failed to initialize SHAP explainer: {e}")
+                return None
         return self._shap
-    
-    @property
-    def ig_explainer(self) -> IntegratedGradientsExplainer:
-        """Lazy load Integrated Gradients explainer."""
-        if self._ig is None:
-            logger.info("Initializing Integrated Gradients explainer...")
-            self._ig = IntegratedGradientsExplainer(
-                self.classifier.model,
-                n_steps=50
-            )
-        return self._ig
     
     def explain_prediction(
         self,
@@ -275,7 +312,7 @@ class ClassificationExplainer:
             Dict with method-specific explanations and optional aggregated result
         """
         if methods is None or 'all' in methods:
-            methods = ['gradcam', 'lime', 'shap', 'ig']
+            methods = ['gradcam', 'lime', 'shap']
         
         logger.info(f"Generating multi-method explanations: {methods}")
         
@@ -332,93 +369,67 @@ class ClassificationExplainer:
         
         # Generate LIME
         if 'lime' in methods:
-            try:
-                logger.info("Generating LIME explanation...")
-                lime_overlay, lime_metadata = self.lime.explain(
-                    original_image,
-                    target_class=target_class,
-                    num_samples=300,  # Faster inference
-                    num_features=8
-                )
-                
-                results['methods']['lime'] = {
-                    'overlay_base64': self._image_to_base64(lime_overlay),
-                    'confidence_score': lime_metadata.get('explanation_score', 0.0),
-                    'metadata': lime_metadata
-                }
-                # Note: LIME doesn't produce a clean heatmap for aggregation
-                
-            except Exception as e:
-                logger.error(f"LIME failed: {e}")
-                results['methods']['lime'] = {'error': str(e)}
+            if not LIME_AVAILABLE or self.lime is None:
+                results['methods']['lime'] = {'error': 'LIME not available - sklearn/lime dependencies missing'}
+            else:
+                try:
+                    logger.info("Generating LIME explanation...")
+                    lime_overlay, lime_metadata = self.lime.explain(
+                        original_image,
+                        target_class=target_class,
+                        num_samples=300,  # Faster inference
+                        num_features=8
+                    )
+                    
+                    results['methods']['lime'] = {
+                        'overlay_base64': self._image_to_base64(lime_overlay),
+                        'confidence_score': lime_metadata.get('explanation_score', 0.0),
+                        'metadata': lime_metadata
+                    }
+                    # Note: LIME doesn't produce a clean heatmap for aggregation
+                    
+                except Exception as e:
+                    logger.error(f"LIME failed: {e}")
+                    results['methods']['lime'] = {'error': str(e)}
         
         # Generate SHAP
         if 'shap' in methods:
-            try:
-                logger.info("Generating SHAP explanation...")
-                # SHAP requires tensor input
-                import torch
-                from torchvision import transforms
-                
-                transform = transforms.Compose([
-                    transforms.ToPILImage(),
-                    transforms.Resize((224, 224)),
-                    transforms.ToTensor()
-                ])
-                
-                img_rgb = cv2.cvtColor(original_image, cv2.COLOR_BGR2RGB)
-                img_tensor = transform(img_rgb).unsqueeze(0)
-                
-                shap_values = self.shap_explainer.explain(img_tensor, target_class=target_class)
-                shap_heatmap = self.shap_explainer.visualize(shap_values, img_tensor)
-                
-                # Convert to BGR for consistency
-                shap_heatmap_bgr = cv2.cvtColor(shap_heatmap, cv2.COLOR_RGB2BGR)
-                
-                results['methods']['shap'] = {
-                    'overlay_base64': self._image_to_base64(shap_heatmap_bgr),
-                    'confidence_score': float(pred_result['confidence']),
-                    'metadata': {'method': 'shap', 'target_class': target_class}
-                }
-                
-            except Exception as e:
-                logger.error(f"SHAP failed: {e}")
-                results['methods']['shap'] = {'error': str(e)}
-        
-        # Generate Integrated Gradients
-        if 'ig' in methods:
-            try:
-                logger.info("Generating Integrated Gradients...")
-                import torch
-                from torchvision import transforms
-                
-                transform = transforms.Compose([
-                    transforms.ToPILImage(),
-                    transforms.Resize((224, 224)),
-                    transforms.ToTensor()
-                ])
-                
-                img_rgb = cv2.cvtColor(original_image, cv2.COLOR_BGR2RGB)
-                img_tensor = transform(img_rgb).unsqueeze(0)
-                
-                ig_attributions = self.ig_explainer.explain(img_tensor, target_class=target_class)
-                ig_heatmap = self.ig_explainer.visualize(ig_attributions, img_tensor)
-                
-                # Convert to BGR
-                ig_heatmap_bgr = cv2.cvtColor(ig_heatmap, cv2.COLOR_RGB2BGR)
-                
-                results['methods']['ig'] = {
-                    'overlay_base64': self._image_to_base64(ig_heatmap_bgr),
-                    'confidence_score': float(pred_result['confidence']),
-                    'metadata': {'method': 'integrated_gradients', 'target_class': target_class}
-                }
-                
-            except Exception as e:
-                logger.error(f"Integrated Gradients failed: {e}")
-                results['methods']['ig'] = {'error': str(e)}
+            if not SHAP_AVAILABLE or self.shap_explainer is None:
+                results['methods']['shap'] = {'error': 'SHAP not available - shap dependency missing'}
+            else:
+                try:
+                    logger.info("Generating SHAP explanation...")
+                    # SHAP requires tensor input
+                    import torch
+                    from torchvision import transforms
+                    
+                    transform = transforms.Compose([
+                        transforms.ToPILImage(),
+                        transforms.Resize((224, 224)),
+                        transforms.ToTensor()
+                    ])
+                    
+                    img_rgb = cv2.cvtColor(original_image, cv2.COLOR_BGR2RGB)
+                    img_tensor = transform(img_rgb).unsqueeze(0)
+                    
+                    # explain() returns (visualization, metadata)
+                    shap_visualization, shap_metadata = self.shap_explainer.explain(img_tensor, target_class=target_class)
+                    
+                    # Convert to BGR for consistency
+                    shap_heatmap_bgr = cv2.cvtColor(shap_visualization, cv2.COLOR_RGB2BGR)
+                    
+                    results['methods']['shap'] = {
+                        'overlay_base64': self._image_to_base64(shap_heatmap_bgr),
+                        'confidence_score': float(pred_result['confidence']),
+                        'metadata': shap_metadata
+                    }
+                    
+                except Exception as e:
+                    logger.error(f"SHAP failed: {e}")
+                    results['methods']['shap'] = {'error': str(e)}
         
         # Aggregate heatmaps if requested and multiple methods succeeded
-        if include_aggregated and len(heatmaps_for_aggregation) > 1:
+        if include_aggregated and len(heatmaps_for_aggregation) > 1 and self._aggregator is not None:
             try:
                 logger.info(f"Aggregating {len(heatmaps_for_aggregation)} heatmaps...")
                 aggregated_heatmap = self._aggregator.aggregate(heatmaps_for_aggregation)

@@ -13,6 +13,10 @@ scikit-learn==1.3.2
 scikit-image==0.22.0
 ultralytics  # YOLOv8
 
+# Segmentation Models
+segment-anything-2  # SAM2 for defect segmentation
+timm  # Vision models library (required by SAM2)
+
 # XAI Libraries
 shap==0.43.0
 lime==0.2.0.1

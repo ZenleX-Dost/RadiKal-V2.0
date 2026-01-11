@@ -26,18 +26,21 @@ timeout /t 2 /nobreak >nul
 echo         Cleanup complete!
 
 echo.
-echo  [2/5] Starting Backend Server (FastAPI + YOLOv8)...
+echo  [2/5] Starting Backend Server (FastAPI + YOLOv8 + SAM2)...
 echo         Location: backend/
 echo         Port: 8000
-echo         Features: XAI, Federated Learning, BI Connectors, Compliance
-start "RadiKal Backend" cmd /k "cd /d "%ROOT_DIR%backend" && echo ======================================== && echo    RadiKal Backend Server (FastAPI) && echo ======================================== && echo. && echo Loading YOLOv8s-cls model (99.8%% accuracy)... && echo Starting XAI engines (GradCAM, SHAP, LIME, IG)... && echo. && echo Server: http://localhost:8000 && echo API Docs: http://localhost:8000/api/docs && echo Health: http://localhost:8000/health && echo. && echo Phase 1: Core Features Ready && echo Phase 2: Enterprise Features Ready && echo Phase 3: Advanced Analytics ^& Compliance Ready && echo. && echo Press Ctrl+C to stop && echo ======================================== && echo. && set DATABASE_TYPE=sqlite && "%ROOT_DIR%venv\Scripts\python.exe" main.py"
+echo         Features: XAI, SAM2 Segmentation, Federated Learning, Compliance
+start "RadiKal Backend" cmd /k "cd /d "%ROOT_DIR%backend" && echo ======================================== && echo    RadiKal Backend Server (FastAPI) && echo ======================================== && echo. && echo Loading YOLOv8s-cls model (99.8%% accuracy)... && echo Loading SAM2 Base+ segmentation model... && echo Starting XAI engines (GradCAM, SHAP, LIME, IG)... && echo. && echo Server: http://localhost:8000 && echo API Docs: http://localhost:8000/api/docs && echo Health: http://localhost:8000/health && echo. && echo Phase 1: Core Features Ready && echo Phase 2: Enterprise Features Ready && echo Phase 3: Advanced Analytics ^& Compliance Ready && echo. && echo Press Ctrl+C to stop && echo ======================================== && echo. && set DATABASE_TYPE=sqlite && "%ROOT_DIR%venv\Scripts\python.exe" main.py"
 
 echo.
 echo  [3/5] Waiting for backend to initialize...
-echo         Loading AI models (YOLOv8s-cls + 4 XAI methods)...
+echo         Loading AI models:
+echo           - YOLOv8s-cls (classification)
+echo           - SAM2 Base+ (segmentation - this may take 20-30 seconds)
+echo           - 4 XAI methods (GradCAM, SHAP, LIME, IG)
 echo         Initializing federated learning coordinator...
 echo         Loading compliance modules (HIPAA, ISO 27001, SOC 2, GDPR)...
-timeout /t 12 /nobreak >nul
+timeout /t 30 /nobreak >nul
 echo         Backend ready!
 
 echo.
@@ -70,6 +73,7 @@ echo  Features Enabled:
 echo.
 echo  Phase 1 - Core Features:
 echo    - YOLOv8s-cls (99.8%% accuracy)
+echo    - SAM2 Base+ Segmentation (pixel-level defect masks)
 echo    - 4 XAI Methods (GradCAM, SHAP, LIME, Integrated Gradients)
 echo    - Real-time notifications (SSE)
 echo    - Rate limiting ^& security

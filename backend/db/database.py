@@ -34,7 +34,7 @@ if DATABASE_TYPE == "supabase":
         max_overflow=20
     )
     
-    print(f"✅ Using Supabase PostgreSQL database at: {DATABASE_URL.split('@')[1]}")
+    print(f"[OK] Using Supabase PostgreSQL database at: {DATABASE_URL.split('@')[1]}")
     
 else:
     # Use SQLite for local development
@@ -50,7 +50,7 @@ else:
         echo=False  # Set to True for SQL debug logging
     )
     
-    print(f"✅ Using SQLite database at: {DB_PATH}")
+    print(f"[OK] Using SQLite database at: {DB_PATH}")
 
 # Create session factory
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -63,9 +63,9 @@ def init_db():
     """
     Base.metadata.create_all(bind=engine)
     if DATABASE_TYPE == "supabase":
-        print(f"✅ Database tables created/verified in Supabase PostgreSQL")
+        print(f"[OK] Database tables created/verified in Supabase PostgreSQL")
     else:
-        print(f"✅ Database initialized at: {DB_PATH}")
+        print(f"[OK] Database initialized at: {DB_PATH}")
 
 
 def get_db() -> Generator[Session, None, None]:
@@ -87,8 +87,8 @@ def get_db() -> Generator[Session, None, None]:
 def reset_db():
     """
     Drop all tables and recreate them.
-    ⚠️ WARNING: This will delete all data!
+    WARNING: This will delete all data!
     """
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
-    print("⚠️ Database reset - all data deleted!")
+    print("[WARN] Database reset - all data deleted!")

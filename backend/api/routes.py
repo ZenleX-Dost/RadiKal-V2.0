@@ -11,6 +11,7 @@ Date: 2025-01-20
 import io
 import base64
 import logging
+import math
 import uuid
 from datetime import datetime, timedelta
 from typing import List, Optional
@@ -35,6 +36,7 @@ from api.schemas import (
     BusinessMetrics,
     DetectionMetrics,
     SegmentationMetrics,
+    SegmentationResult,
     ExportRequest,
     ExportResponse,
     CalibrationResponse,
@@ -42,14 +44,30 @@ from api.schemas import (
     HealthResponse,
     AnalysisHistoryItem,
     AnalysisHistoryResponse,
+    AnalysisMode,
+    SegmentationGuidance,
 )
 from core.models.detector import DefectDetector
 from core.models.yolo_detector import YOLODefectDetector
 from core.preprocessing.image_processor import ImageProcessor
 from db import get_db, Analysis, Detection, Explanation
+
+# Initialize logger early for imports
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# File validation for security
+try:
+    from api.validators import validate_image_upload, sanitize_filename
+    FILE_VALIDATION_ENABLED = True
+except ImportError:
+    FILE_VALIDATION_ENABLED = False
+    logger.warning("[WARN] File validation module not available")
+
 # XAI imports - Now with real Grad-CAM for YOLOv8 Classification!
 from core.xai.classification_explainer import ClassificationExplainer
 from core.models.yolo_classifier import YOLOClassifier
+from core.models.hybrid_defect_analyzer import HybridDefectAnalyzer
 # Temporarily disabled SHAP/LIME due to scipy import issues
 # from core.xai.shap_explainer import SHAPExplainer
 # from core.xai.lime_explainer import LIMEExplainer
@@ -59,15 +77,13 @@ from core.models.yolo_classifier import YOLOClassifier
 # from core.metrics.detection_metrics import calculate_map, calculate_auroc
 # from core.metrics.segmentation_metrics import calculate_mean_iou
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
 router = APIRouter(prefix="/api/xai-qc", tags=["XAI Quality Control"])
 
 # Global model instances (will be loaded on startup)
 model: Optional[YOLODefectDetector] = None  # Using YOLOv8 now!
 classifier: Optional[YOLOClassifier] = None  # NEW: YOLOv8 Classification model
 explainer: Optional[ClassificationExplainer] = None  # NEW: Real XAI explainer
+hybrid_analyzer: Optional[HybridDefectAnalyzer] = None  # NEW: Hybrid Classification + Segmentation
 image_processor: Optional[ImageProcessor] = None
 xai_explainers: dict = {}
 # mc_dropout: Optional[MCDropoutEstimator] = None  # Disabled temporarily
@@ -105,7 +121,7 @@ def initialize_models():
     
     This function should be called during FastAPI app initialization.
     """
-    global model, classifier, explainer, image_processor, xai_explainers  # , mc_dropout, temperature_scaler
+    global model, classifier, explainer, hybrid_analyzer, image_processor, xai_explainers  # , mc_dropout, temperature_scaler
     
     logger.info(f"Initializing models on device: {DEVICE}")
     
@@ -117,11 +133,28 @@ def initialize_models():
             nd_confidence_threshold=0.7
         )
         explainer = ClassificationExplainer(classifier)
-        logger.info(f"✅ Loaded YOLOv8 Classification model from {YOLO_MODEL_PATH}")
-        logger.info(f"✅ Initialized ClassificationExplainer with Grad-CAM")
+        logger.info(f"[OK] Loaded YOLOv8 Classification model from {YOLO_MODEL_PATH}")
+        logger.info(f"[OK] Initialized ClassificationExplainer with Grad-CAM")
     except FileNotFoundError as e:
-        logger.error(f"❌ YOLOv8 classification model not found: {e}")
-        logger.warning("⚠️  XAI features will be limited")
+        logger.error(f"[ERROR] YOLOv8 classification model not found: {e}")
+        logger.warning("[WARN] XAI features will be limited")
+    
+    # Initialize Hybrid Analyzer (YOLOv8 + SAM2)
+    try:
+        logger.info("Initializing Hybrid Defect Analyzer (YOLOv8 + SAM2)...")
+        hybrid_analyzer = HybridDefectAnalyzer(
+            classifier_path=str(YOLO_MODEL_PATH),
+            segmenter_size="base",  # Use base+ model (sam2.1_hiera_b+.pt) - best for 6GB GPU
+            device='cuda' if DEVICE == 'cuda' else 'cpu',  # SAM2 needs 'cuda' not '0'
+            nd_threshold=0.7,
+            enable_sam2=True  # Will gracefully fallback if SAM2 not available
+        )
+        logger.info("[OK] Hybrid Analyzer initialized")
+        logger.info(f"   SAM2 enabled: {hybrid_analyzer.enable_sam2}")
+    except Exception as e:
+        logger.warning(f"[WARN] Failed to initialize Hybrid Analyzer: {e}")
+        logger.warning("[WARN] Segmentation features will be unavailable")
+        hybrid_analyzer = None
     
     # Initialize YOLOv8 detector
     try:
@@ -131,12 +164,12 @@ def initialize_models():
             confidence_threshold=0.5,
             iou_threshold=0.45
         )
-        logger.info(f"✅ Loaded YOLOv8 model from {YOLO_MODEL_PATH}")
+        logger.info(f"[OK] Loaded YOLOv8 model from {YOLO_MODEL_PATH}")
         logger.info(f"   Model Info: {model.get_model_info()['model_type']}")
         logger.info(f"   Performance: mAP@0.5 = {model.get_model_info()['performance']['mAP@0.5']}")
     except FileNotFoundError as e:
-        logger.error(f"❌ YOLOv8 model not found: {e}")
-        logger.warning("⚠️  Falling back to legacy Faster R-CNN model...")
+        logger.error(f"[ERROR] YOLOv8 model not found: {e}")
+        logger.warning("[WARN] Falling back to legacy Faster R-CNN model...")
         # Fallback to legacy model
         model = DefectDetector(num_classes=2, device=DEVICE)
         if MODEL_PATH.exists():
@@ -171,7 +204,7 @@ def initialize_models():
     # # Initialize temperature scaling (will be calibrated later)
     # temperature_scaler = TemperatureScaling()
     
-    logger.info("✅ All models initialized successfully")
+    logger.info("[OK] All models initialized successfully")
 
 
 def numpy_to_base64(arr: np.ndarray) -> str:
@@ -199,8 +232,8 @@ def numpy_to_base64(arr: np.ndarray) -> str:
 @router.post("/detect", response_model=DetectionResponse)
 async def detect_defects(
     file: UploadFile = File(...),
-    contrast: float = 1.0,
-    contrast_method: str = "linear",
+    contrast: float = Query(default=1.0, ge=0.1, le=5.0, description="Contrast factor"),
+    contrast_method: str = Query(default="linear", pattern="^(linear|histogram|clahe|gamma)$"),
     db: Session = Depends(get_db),
     # # Auth disabled,  # Auth disabled for now
 ):
@@ -211,20 +244,25 @@ async def detect_defects(
     bounding boxes, confidence scores, and segmentation masks.
     
     Args:
-        file: Uploaded image file (JPEG, PNG)
-        contrast: Contrast adjustment factor (1.0 = no change, >1.0 = increase, <1.0 = decrease)
+        file: Uploaded image file (JPEG, PNG, max 10MB)
+        contrast: Contrast adjustment factor (0.1-5.0, default 1.0)
         contrast_method: Method for contrast adjustment ('linear', 'histogram', 'clahe', 'gamma')
-        current_user: Authenticated user information
         
     Returns:
         DetectionResponse with detections and metadata
         
     Raises:
-        HTTPException: If image processing fails
+        HTTPException: If image processing fails or validation fails
     """
     try:
-        # Read and process image
-        image_bytes = await file.read()
+        # Validate uploaded file for security
+        if FILE_VALIDATION_ENABLED:
+            image_bytes, content_type = await validate_image_upload(file)
+            safe_filename = sanitize_filename(file.filename)
+        else:
+            image_bytes = await file.read()
+            safe_filename = file.filename or "unknown.jpg"
+        
         image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
         image_np = np.array(image)
         
@@ -291,7 +329,7 @@ async def detect_defects(
             # Create analysis record
             analysis = Analysis(
                 image_id=image_id,
-                filename=file.filename,
+                filename=safe_filename,  # Use sanitized filename
                 upload_timestamp=datetime.utcnow(),
                 image_width=image.width,
                 image_height=image.height,
@@ -324,7 +362,7 @@ async def detect_defects(
                 db.add(detection)
             
             db.commit()
-            logger.info(f"✅ Analysis saved to database: {image_id} ({len(results)} detections)")
+            logger.info(f"[OK] Analysis saved to database: {image_id} ({len(results)} detections)")
             
         except Exception as db_error:
             db.rollback()
@@ -363,8 +401,13 @@ async def preprocess_image(
         raise HTTPException(status_code=503, detail="Image processor not initialized")
     
     try:
+        # Validate file upload for security
+        if FILE_VALIDATION_ENABLED:
+            contents, content_type = await validate_image_upload(file)
+        else:
+            contents = await file.read()
+        
         # Read uploaded image
-        contents = await file.read()
         nparr = np.frombuffer(contents, np.uint8)
         image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
@@ -389,7 +432,7 @@ async def preprocess_image(
         original_b64 = base64.b64encode(original_buffer.getvalue()).decode('utf-8')
         processed_b64 = base64.b64encode(processed_buffer.getvalue()).decode('utf-8')
         
-        logger.info(f"✅ Preprocessed image: contrast={contrast}, method={method}")
+        logger.info(f"[OK] Preprocessed image: contrast={contrast}, method={method}")
         
         return {
             "image_id": str(uuid.uuid4()),
@@ -401,7 +444,7 @@ async def preprocess_image(
         }
         
     except Exception as e:
-        logger.error(f"❌ Preprocessing failed: {e}")
+        logger.error(f"[ERROR] Preprocessing failed: {e}")
         raise HTTPException(status_code=500, detail=f"Preprocessing failed: {str(e)}")
 
 
@@ -409,15 +452,15 @@ async def preprocess_image(
 async def explain_detection(
     file: UploadFile = File(...),
     methods: str = Query("gradcam", description="XAI methods to use (comma-separated): gradcam,lime,shap,ig,all"),
-    contrast: float = 1.0,
-    contrast_method: str = "linear",
+    contrast: float = Query(1.0, ge=0.1, le=5.0, description="Contrast adjustment factor"),
+    contrast_method: str = Query("linear", regex="^(linear|histogram|clahe|gamma)$"),
     db: Session = Depends(get_db),
     # # Auth disabled,  # Auth disabled for now
 ):
     """
     Generate XAI explanations for a radiographic weld image using multiple methods.
     
-    **✅ ADVANCED XAI ENABLED**: Supports Grad-CAM, LIME, SHAP, and Integrated Gradients!
+    **ADVANCED XAI ENABLED**: Supports Grad-CAM, LIME, SHAP, and Integrated Gradients!
     
     Features:
     - **Grad-CAM**: Class Activation Mapping showing defect localization
@@ -442,6 +485,12 @@ async def explain_detection(
         HTTPException: If explanation generation fails
     """
     try:
+        # Validate file upload for security
+        if FILE_VALIDATION_ENABLED:
+            image_bytes, content_type = await validate_image_upload(file)
+        else:
+            image_bytes = await file.read()
+        
         if explainer is None:
             raise HTTPException(
                 status_code=503,
@@ -454,7 +503,6 @@ async def explain_detection(
         # Save uploaded file temporarily (applying contrast adjustment if needed)
         temp_path = EXPORTS_DIR / f"temp_{image_id}.jpg"
         try:
-            image_bytes = await file.read()
             image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
             
             # Apply contrast adjustment if needed
@@ -497,7 +545,10 @@ async def explain_detection(
                 # Get aggregated or use first method as fallback
                 if 'aggregated' in explanation_result:
                     aggregated_heatmap = explanation_result['aggregated']['overlay_base64']
-                    consensus_score = explanation_result['aggregated']['consensus_score']
+                    consensus_score = explanation_result['aggregated'].get('consensus_score', 0.0)
+                    # Ensure consensus_score is valid
+                    if consensus_score is None or (isinstance(consensus_score, float) and (math.isnan(consensus_score) or consensus_score == 0.0)):
+                        consensus_score = explanation_result['prediction']['confidence']
                 else:
                     first_method = list(explanation_result['methods'].values())[0]
                     aggregated_heatmap = first_method.get('overlay_base64') or first_method.get('heatmap_base64')
@@ -550,7 +601,8 @@ async def explain_detection(
                 
                 explanations = [gradcam_explanation, overlay_explanation]
                 consensus_score = explanation_result['prediction']['confidence']
-                aggregated_heatmap = explanation_result['heatmap_base64']
+                # Prefer overlay over heatmap for aggregated display
+                aggregated_heatmap = explanation_result.get('overlay_base64') or explanation_result.get('heatmap_base64', '')
                 
                 regions = explanation_result.get('regions', [])
                 location_desc = explanation_result.get('location_description', '')
@@ -575,7 +627,7 @@ async def explain_detection(
                 }
             )
             
-            logger.info(f"✅ Generated XAI explanation: {explanation_result['prediction']['class_full_name']} "
+            logger.info(f"[OK] Generated XAI explanation: {explanation_result['prediction']['class_full_name']} "
                        f"({explanation_result['prediction']['confidence']*100:.1f}% confidence)")
             logger.info(f"   Location: {location_desc}")
             logger.info(f"   Regions detected: {len(regions)}")
@@ -592,7 +644,7 @@ async def explain_detection(
                     # Update existing analysis with classification info
                     existing_analysis.mean_confidence = confidence
                     existing_analysis.has_defects = predicted_class.lower() != 'no defect'
-                    logger.info(f"✅ Updated existing analysis: {response.image_id}")
+                    logger.info(f"[OK] Updated existing analysis: {response.image_id}")
                     analysis_db_id = existing_analysis.id
                 else:
                     # No existing analysis (direct /explain call), create new one
@@ -623,7 +675,7 @@ async def explain_detection(
                     db.add(db_analysis)
                     db.flush()  # Get the ID
                     analysis_db_id = db_analysis.id
-                    logger.info(f"✅ Created new analysis: {response.image_id}")
+                    logger.info(f"[OK] Created new analysis: {response.image_id}")
                     
                     # Also create a Detection record for classification result
                     if has_defects:
@@ -641,7 +693,7 @@ async def explain_detection(
                             severity='high',
                         )
                         db.add(detection)
-                        logger.info(f"✅ Created detection: {CLASS_NAMES.get(predicted_label, predicted_class)}")
+                        logger.info(f"[OK] Created detection: {CLASS_NAMES.get(predicted_label, predicted_class)}")
                 
                 # Create Explanation record (store full heatmap, not truncated)
                 db_explanation = Explanation(
@@ -653,7 +705,7 @@ async def explain_detection(
                 db.add(db_explanation)
                 
                 db.commit()
-                logger.info(f"✅ Saved explanation to database for analysis: {response.image_id}")
+                logger.info(f"[OK] Saved explanation to database for analysis: {response.image_id}")
             except Exception as db_error:
                 logger.error(f"Failed to save to database: {db_error}")
                 db.rollback()
@@ -671,6 +723,171 @@ async def explain_detection(
         raise HTTPException(
             status_code=500,
             detail=f"Explanation generation failed: {str(e)}"
+        )
+
+
+@router.post("/analyze-hybrid", response_model=ExplainResponse)
+async def analyze_hybrid(
+    file: UploadFile = File(...),
+    mode: str = Query("hybrid", description="Analysis mode: classification, segmentation, or hybrid"),
+    enable_segmentation: bool = Query(True, description="Enable SAM2 segmentation"),
+    segmentation_guidance: str = Query("auto", description="Segmentation strategy: auto, center, or grid"),
+    methods: str = Query("gradcam", description="XAI methods (comma-separated): gradcam,lime,shap,ig,all"),
+    db: Session = Depends(get_db),
+):
+    """
+    **HYBRID ANALYSIS**: YOLOv8 Classification + SAM2 Segmentation
+    
+    This endpoint combines two powerful models for comprehensive defect analysis:
+    - **YOLOv8 Classification**: Determines defect type (LP, PO, CR, ND)  
+    - **SAM2 Segmentation**: Provides precise pixel-level defect localization
+    
+    **Analysis Modes**:
+    - `classification`: Fast defect type identification only
+    - `segmentation`: Detailed mask generation (SAM2 required)
+    - `hybrid` (default): Classification guides segmentation for optimal results
+    
+    **Segmentation Guidance**:
+    - `auto`: Smart guidance (center point for defects, auto-segment for ND)
+    - `center`: Always use center point prompt
+    - `grid`: Grid-based automatic segmentation
+    
+    **Returns**:
+    - Classification: defect type, confidence, probabilities
+    - Segmentation: pixel masks, bounding box, coverage percentage
+    - XAI: Grad-CAM heatmaps with optional segmentation overlay
+    """
+    if hybrid_analyzer is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Hybrid analyzer not available. SAM2 may not be installed."
+        )
+    
+    try:
+        # Validate mode
+        if mode not in ["classification", "segmentation", "hybrid"]:
+            raise HTTPException(status_code=400, detail="Invalid mode. Must be: classification, segmentation, or hybrid")
+        
+        # Validate guidance
+        if segmentation_guidance not in ["auto", "center", "grid"]:
+            raise HTTPException(status_code=400, detail="Invalid segmentation_guidance. Must be: auto, center, or grid")
+        
+        # Read and validate image
+        image_bytes = await file.read()
+        
+        if FILE_VALIDATION_ENABLED:
+            validate_image_upload(image_bytes)
+        
+        # Convert to PIL Image
+        image_pil = Image.open(io.BytesIO(image_bytes)).convert('RGB')
+        image_np = np.array(image_pil)
+        
+        # Generate image ID
+        image_id = str(uuid.uuid4())
+        
+        # Parse XAI methods
+        method_list = [m.strip() for m in methods.split(',')]
+        
+        logger.info(f"[START] Hybrid analysis: mode={mode}, segmentation={enable_segmentation}, guidance={segmentation_guidance}")
+        
+        # Run hybrid analysis
+        analysis_result = hybrid_analyzer.analyze(
+            image=image_np,
+            mode=mode,
+            return_visualization=True,
+            segmentation_guidance=segmentation_guidance
+        )
+        
+        # Build response
+        explanations = []
+        aggregated_heatmap = None
+        consensus_score = 0.0
+        
+        # Classification results
+        classification_data = None
+        if analysis_result['classification']:
+            cls = analysis_result['classification']
+            classification_data = {
+                'predicted_class': cls['predicted_class'],
+                'predicted_class_name': cls['predicted_class_name'],
+                'predicted_class_full_name': cls['predicted_class_full_name'],
+                'confidence': cls['confidence'],
+                'all_probabilities': cls['all_probabilities'],
+                'is_defect': cls['is_defect'],
+                'defect_type': cls.get('defect_type')
+            }
+            consensus_score = cls['confidence']
+            
+            # Generate XAI heatmap if requested
+            if 'gradcam' in method_list or 'all' in method_list:
+                try:
+                    xai_result = explainer.explain_prediction(
+                        image_np,
+                        include_overlay=True
+                    )
+                    explanations.append(ExplanationResult(
+                        method="gradcam",
+                        heatmap_base64=xai_result['overlay_base64'],
+                        confidence_score=cls['confidence']
+                    ))
+                    aggregated_heatmap = xai_result['overlay_base64']
+                except Exception as e:
+                    logger.warning(f"Failed to generate Grad-CAM: {e}")
+        
+        # Segmentation results
+        segmentation_data = None
+        if analysis_result['segmentation'] and analysis_result['segmentation']['has_segmentation']:
+            seg = analysis_result['segmentation']
+            segmentation_data = {
+                'has_segmentation': seg['has_segmentation'],
+                'num_segments': seg['num_segments'],
+                'bbox': seg['bbox'],
+                'area': seg['area'],
+                'centroid': seg['centroid'],
+                'coverage_percent': seg['coverage_percent']
+            }
+            
+            # Add segmentation overlay if available
+            if 'visualization' in analysis_result and 'segmentation_overlay' in analysis_result['visualization']:
+                explanations.append(ExplanationResult(
+                    method="sam2_segmentation",
+                    heatmap_base64=analysis_result['visualization']['segmentation_overlay'],
+                    confidence_score=seg.get('scores', [0.0])[0] if seg.get('scores') else 0.0
+                ))
+                
+                # Use segmentation as aggregated if no other heatmap
+                if not aggregated_heatmap:
+                    aggregated_heatmap = analysis_result['visualization']['segmentation_overlay']
+        
+        # Build response
+        response = ExplainResponse(
+            image_id=image_id,
+            explanations=explanations,
+            aggregated_heatmap=aggregated_heatmap,
+            consensus_score=consensus_score,
+            computation_time_ms=analysis_result['metadata']['processing_time'] * 1000,
+            timestamp=datetime.now(),
+            classification=classification_data,
+            segmentation=segmentation_data,
+            metadata={
+                'mode': mode,
+                'sam2_enabled': hybrid_analyzer.enable_sam2,
+                'segmentation_guidance': segmentation_guidance,
+                'image_size': analysis_result['metadata']['image_size']
+            }
+        )
+        
+        logger.info(f"[OK] Hybrid analysis complete: {classification_data.get('predicted_class_name') if classification_data else 'N/A'}")
+        
+        return response
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Hybrid analysis failed: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Hybrid analysis failed: {str(e)}"
         )
 
 
@@ -947,7 +1164,7 @@ async def clear_all_data(db: Session = Depends(get_db)):
     """
     Clear all analysis data from the database.
     
-    ⚠️ WARNING: This deletes ALL analyses, detections, and explanations.
+    WARNING: This deletes ALL analyses, detections, and explanations.
     This action cannot be undone!
     
     Returns:
@@ -966,7 +1183,7 @@ async def clear_all_data(db: Session = Depends(get_db)):
         
         db.commit()
         
-        logger.info(f"🗑️ Cleared all data: {analysis_count} analyses, {detection_count} detections, {explanation_count} explanations")
+        logger.info(f"[CLEAR] Cleared all data: {analysis_count} analyses, {detection_count} detections, {explanation_count} explanations")
         
         return {
             "status": "success",
@@ -992,12 +1209,22 @@ async def health_check():
     Returns:
         HealthResponse with service status
     """
+    import time
     model_loaded = model is not None
+    gpu_available = torch.cuda.is_available()
+    
+    # Calculate uptime (approximate - since module load)
+    uptime_seconds = time.time() - getattr(health_check, '_start_time', time.time())
+    if not hasattr(health_check, '_start_time'):
+        health_check._start_time = time.time()
+        uptime_seconds = 0.0
     
     return HealthResponse(
         status="healthy" if model_loaded else "degraded",
         timestamp=datetime.now(),
         model_loaded=model_loaded,
+        gpu_available=gpu_available,
+        uptime_seconds=uptime_seconds,
         device=DEVICE,
-        version="1.0.0",
+        version="2.0.0",
     )

@@ -2,7 +2,7 @@
 
 from typing import List, Optional, Dict, Any
 from datetime import datetime
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, ConfigDict
 from enum import Enum
 
 
@@ -21,6 +21,20 @@ class XAIMethod(str, Enum):
     LIME = "lime"
     INTEGRATED_GRADIENTS = "ig"
     ALL = "all"
+
+
+class AnalysisMode(str, Enum):
+    """Analysis mode for hybrid defect analyzer."""
+    CLASSIFICATION = "classification"
+    SEGMENTATION = "segmentation"
+    HYBRID = "hybrid"
+
+
+class SegmentationGuidance(str, Enum):
+    """Segmentation guidance strategy."""
+    AUTO = "auto"
+    CENTER = "center"
+    GRID = "grid"
 
 
 class DetectionBox(BaseModel):
@@ -49,11 +63,15 @@ class ExplainRequest(BaseModel):
     image_id: str
     methods: List[XAIMethod] = Field(default=[XAIMethod.ALL])
     target_class: Optional[int] = None
+    # New SAM2 options
+    analysis_mode: AnalysisMode = Field(default=AnalysisMode.HYBRID, description="Analysis mode")
+    enable_segmentation: bool = Field(default=True, description="Enable SAM2 segmentation")
+    segmentation_guidance: SegmentationGuidance = Field(default=SegmentationGuidance.AUTO, description="Segmentation strategy")
 
 
 class ExplanationResult(BaseModel):
     """Individual explanation result."""
-    model_config = {"populate_by_name": True}
+    model_config = ConfigDict(populate_by_name=True)
     
     method: str
     heatmap_base64: str = Field(..., description="Base64-encoded heatmap image")
@@ -68,7 +86,10 @@ class ExplainResponse(BaseModel):
     consensus_score: float = Field(..., ge=0.0, le=1.0)
     computation_time_ms: float
     timestamp: datetime = Field(default_factory=datetime.utcnow)
-    metadata: Optional[dict] = None  # Classification metadata including prediction details
+    metadata: Optional[dict] = None
+    # New segmentation fields
+    segmentation: Optional[Dict[str, Any]] = Field(default=None, description="SAM2 segmentation results")
+    classification: Optional[Dict[str, Any]] = Field(default=None, description="YOLOv8 classification results")
 
 
 class MetricsRequest(BaseModel):
@@ -94,6 +115,8 @@ class BusinessMetrics(BaseModel):
 
 class DetectionMetrics(BaseModel):
     """Detection metrics data."""
+    model_config = ConfigDict(populate_by_name=True)
+    
     map50: float = Field(default=0.9988, alias="mAP@0.5", description="mAP at IoU threshold 0.5")
     map75: float = Field(default=0.9856, alias="mAP@0.75", description="mAP at IoU threshold 0.75")
     map: float = Field(default=0.9974, alias="mAP", description="mAP average across IoU thresholds 0.5:0.95")
@@ -101,8 +124,6 @@ class DetectionMetrics(BaseModel):
     recall: float = Field(default=0.939, description="Recall score")
     f1_score: float = Field(default=0.948, description="F1 score")
     auroc: float = Field(default=0.945, description="AUROC score")
-    
-    model_config = {"populate_by_name": True}
 
 
 class SegmentationMetrics(BaseModel):
@@ -112,17 +133,29 @@ class SegmentationMetrics(BaseModel):
     pixel_accuracy: float
 
 
+class SegmentationResult(BaseModel):
+    """SAM2 segmentation result."""
+    has_segmentation: bool
+    num_segments: int
+    masks: List[List[List[int]]] = Field(default_factory=list, description="Binary masks (H, W)")
+    scores: List[float] = Field(default_factory=list, description="Confidence scores for each mask")
+    primary_mask: Optional[List[List[int]]] = Field(default=None, description="Best mask")
+    bbox: List[int] = Field(default=[0, 0, 0, 0], description="Bounding box [x, y, w, h]")
+    area: int = Field(default=0, description="Area in pixels")
+    centroid: List[float] = Field(default=[0.0, 0.0], description="Centroid [x, y]")
+    coverage_percent: float = Field(default=0.0, description="Percentage of image covered")
+
+
 class MetricsResponse(BaseModel):
     """Response model for metrics."""
+    model_config = ConfigDict(populate_by_name=True)
+    
     business_metrics: Optional[BusinessMetrics] = None
     detection_metrics: Optional[DetectionMetrics] = None
     segmentation_metrics: Optional[SegmentationMetrics] = None
     total_inspections: int
     date_range: Dict[str, Optional[datetime]]
     timestamp: datetime = Field(default_factory=datetime.utcnow)
-
-    class Config:
-        allow_population_by_field_name = True
 
 
 class ExportFormat(str, Enum):
@@ -134,6 +167,7 @@ class ExportFormat(str, Enum):
 class ExportRequest(BaseModel):
     """Request model for report export."""
     format: ExportFormat = ExportFormat.PDF
+    image_ids: List[str] = Field(default_factory=list, description="List of image IDs to include in report")
     start_date: Optional[datetime] = None
     end_date: Optional[datetime] = None
     include_images: bool = True
@@ -142,12 +176,15 @@ class ExportRequest(BaseModel):
 
 class ExportResponse(BaseModel):
     """Response model for report export."""
-    report_id: str
+    export_id: str = Field(..., alias="report_id", description="Export report ID")
     download_url: str
     format: ExportFormat
-    file_size_bytes: int
-    generation_time_ms: float
+    file_size_bytes: Optional[int] = 0
+    generation_time_ms: Optional[float] = 0.0
     timestamp: datetime = Field(default_factory=datetime.utcnow)
+    expires_at: Optional[datetime] = None
+    
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class CalibrationMetrics(BaseModel):
@@ -170,16 +207,17 @@ class CalibrationResponse(BaseModel):
 
 class PreprocessRequest(BaseModel):
     """Request model for image preprocessing with contrast adjustment."""
-    contrast: float = Field(default=1.0, ge=0.5, le=3.0)
-    method: str = Field(default='clahe', pattern='^(linear|histogram|clahe|gamma)$')
-    
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "contrast": 1.5,
                 "method": "clahe"
             }
         }
+    )
+    
+    contrast: float = Field(default=1.0, ge=0.5, le=3.0)
+    method: str = Field(default='clahe', pattern='^(linear|histogram|clahe|gamma)$')
 
 
 class PreprocessResponse(BaseModel):
@@ -210,11 +248,12 @@ class HealthStatus(str, Enum):
 class HealthResponse(BaseModel):
     """Response model for health check."""
     status: HealthStatus
-    version: str = "0.1.0"
+    version: str = "2.0.0"
     timestamp: datetime = Field(default_factory=datetime.utcnow)
     gpu_available: bool
     model_loaded: bool
     uptime_seconds: float
+    device: Optional[str] = None
 
 
 class ErrorResponse(BaseModel):
@@ -226,6 +265,8 @@ class ErrorResponse(BaseModel):
 
 class AnalysisHistoryItem(BaseModel):
     """Single analysis history item for frontend display."""
+    model_config = ConfigDict(from_attributes=True)
+    
     id: int
     image_id: str
     filename: str
@@ -236,8 +277,6 @@ class AnalysisHistoryItem(BaseModel):
     mean_confidence: float
     mean_uncertainty: float
     status: str
-    
-    model_config = {"from_attributes": True}
 
 
 class AnalysisHistoryResponse(BaseModel):
@@ -253,7 +292,7 @@ class AnalysisHistoryResponse(BaseModel):
 
 class DefectTrendData(BaseModel):
     """Defect trend data point."""
-    period: str  # Date or time period label
+    period: str
     total_inspections: int
     defect_count: int
     defect_rate: float
@@ -273,8 +312,10 @@ class ComparativeAnalysis(BaseModel):
     """Comparative analysis between periods."""
     period1: Dict[str, Any]
     period2: Dict[str, Any]
-    changes: Dict[str, float]  # Percentage changes
-    significant_changes: List[str]
+    changes: Dict[str, float] = Field(default_factory=dict)
+    significant_changes: List[str] = Field(default_factory=list)
+    defect_rate_change: float = 0.0
+    quality_improvement_percent: float = 0.0
     timestamp: datetime = Field(default_factory=datetime.utcnow)
 
 
@@ -294,7 +335,7 @@ class ProjectQualityScore(BaseModel):
     project_id: str
     quality_score: float
     defect_density: float
-    trend: str  # 'improving', 'stable', 'declining'
+    trend: str
     timestamp: datetime = Field(default_factory=datetime.utcnow)
 
 
@@ -303,7 +344,7 @@ class ProjectQualityScore(BaseModel):
 class CustomDefectTypeCreate(BaseModel):
     """Schema for creating a new custom defect type."""
     name: str = Field(..., min_length=1, max_length=100, description="Defect type name")
-    code: str = Field(..., min_length=1, max_length=10, description="Short code (e.g., 'WM' for weld mismatch)")
+    code: str = Field(..., min_length=1, max_length=10, description="Short code")
     description: Optional[str] = Field(None, max_length=500)
     severity_default: str = Field(default="MEDIUM", description="Default severity level")
     expected_features: Optional[Dict[str, Any]] = Field(default_factory=dict)
@@ -326,6 +367,8 @@ class CustomDefectTypeUpdate(BaseModel):
 
 class CustomDefectTypeResponse(BaseModel):
     """Response schema for custom defect type."""
+    model_config = ConfigDict(from_attributes=True)
+    
     id: int
     name: str
     code: str
@@ -341,9 +384,6 @@ class CustomDefectTypeResponse(BaseModel):
     created_at: datetime
     created_by: str
     updated_at: datetime
-    
-    class Config:
-        from_attributes = True
 
 
 class TrainingSampleCreate(BaseModel):
@@ -351,7 +391,7 @@ class TrainingSampleCreate(BaseModel):
     defect_type_id: int
     image_path: str
     image_id: Optional[str] = None
-    annotations: Dict[str, Any] = Field(..., description="Annotation data (bbox, class, etc.)")
+    annotations: Dict[str, Any] = Field(..., description="Annotation data")
     annotation_format: str = Field(default="yolo", description="Annotation format")
     source: str = Field(..., description="Source of the sample")
     quality_score: float = Field(default=1.0, ge=0.0, le=1.0)
@@ -360,6 +400,8 @@ class TrainingSampleCreate(BaseModel):
 
 class TrainingSampleResponse(BaseModel):
     """Response schema for training sample."""
+    model_config = ConfigDict(from_attributes=True)
+    
     id: int
     defect_type_id: int
     image_path: str
@@ -374,13 +416,12 @@ class TrainingSampleResponse(BaseModel):
     labeled_by: str
     verified_by: Optional[str]
     verified_at: Optional[datetime]
-    
-    class Config:
-        from_attributes = True
 
 
 class ModelVersionResponse(BaseModel):
     """Response schema for model version."""
+    model_config = ConfigDict(from_attributes=True)
+    
     id: int
     version_number: str
     model_name: str
@@ -401,9 +442,6 @@ class ModelVersionResponse(BaseModel):
     created_at: datetime
     trained_by: str
     deployed_at: Optional[datetime]
-    
-    class Config:
-        from_attributes = True
 
 
 class TrainingDatasetCreate(BaseModel):
@@ -423,6 +461,8 @@ class TrainingDatasetCreate(BaseModel):
 
 class TrainingDatasetResponse(BaseModel):
     """Response schema for training dataset."""
+    model_config = ConfigDict(from_attributes=True)
+    
     id: int
     name: str
     description: Optional[str]
@@ -438,9 +478,6 @@ class TrainingDatasetResponse(BaseModel):
     has_validation_errors: bool
     created_at: datetime
     created_by: str
-    
-    class Config:
-        from_attributes = True
 
 
 class TrainingJobCreate(BaseModel):
@@ -453,6 +490,8 @@ class TrainingJobCreate(BaseModel):
 
 class TrainingJobResponse(BaseModel):
     """Response schema for training job."""
+    model_config = ConfigDict(from_attributes=True)
+    
     id: int
     model_version_id: int
     job_type: str
@@ -471,9 +510,6 @@ class TrainingJobResponse(BaseModel):
     started_at: Optional[datetime]
     completed_at: Optional[datetime]
     error_message: Optional[str]
-    
-    class Config:
-        from_attributes = True
 
 
 class TrainingJobProgress(BaseModel):
@@ -489,6 +525,8 @@ class TrainingJobProgress(BaseModel):
 
 class ActiveLearningSuggestion(BaseModel):
     """Active learning suggestion response."""
+    model_config = ConfigDict(from_attributes=True)
+    
     id: int
     analysis_id: int
     image_id: str
@@ -498,16 +536,13 @@ class ActiveLearningSuggestion(BaseModel):
     suggested_defect_types: List[Dict[str, Any]]
     status: str
     added_at: datetime
-    
-    class Config:
-        from_attributes = True
 
 
 class ModelDeploymentRequest(BaseModel):
     """Request to deploy a model version."""
     model_version_id: int
     deployment_strategy: str = Field(default="replace", description="replace, canary, blue_green")
-    rollback_threshold: Optional[float] = Field(None, ge=0.0, le=1.0, description="Auto-rollback if accuracy drops below this")
+    rollback_threshold: Optional[float] = Field(None, ge=0.0, le=1.0)
 
 
 class ModelRollbackRequest(BaseModel):
