@@ -58,7 +58,7 @@ if __name__ == "__main__":
     results = {}
     
     # Test each method
-    for method in ['gradcam', 'shap', 'lime', 'ig']:
+    for method in ['gradcam', 'shap', 'lime']:
         print(f"\n--- Testing {method} ---")
         results[method] = test_explain(method)
     

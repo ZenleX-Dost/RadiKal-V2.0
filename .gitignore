@@ -329,6 +329,30 @@ temp/
 tmp/
 
 # ============================================================================
+# Project Specific - Reports and Documentation Assets
+# ============================================================================
+
+# LaTeX Reports and generated PDFs
+RadiKal_Report.pdf
+RadiKal_Report.aux
+RadiKal_Report.bbl
+RadiKal_Report.blg
+RadiKal_Report.fdb_latexmk
+RadiKal_Report.fls
+RadiKal_Report.lof
+RadiKal_Report.lot
+RadiKal_Report.toc
+RadiKal_Report.out
+RadiKal_Report.log
+RadiKal_Report.synctex.gz
+
+# Images folder (screenshots, charts, figures)
+images/
+
+# Articles and research papers
+Articles/
+
+# ============================================================================
 # Docker
 # ============================================================================
 

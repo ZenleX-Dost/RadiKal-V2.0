@@ -14,14 +14,14 @@ import logging
 import math
 import uuid
 from datetime import datetime, timedelta
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from pathlib import Path
 
 import numpy as np
 import torch
 import cv2
 from PIL import Image
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, Query
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, Query, Body
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
@@ -451,7 +451,7 @@ async def preprocess_image(
 @router.post("/explain", response_model=ExplainResponse)
 async def explain_detection(
     file: UploadFile = File(...),
-    methods: str = Query("gradcam", description="XAI methods to use (comma-separated): gradcam,lime,shap,ig,all"),
+    methods: str = Query("gradcam", description="XAI methods to use (comma-separated): gradcam,lime,shap,all"),
     contrast: float = Query(1.0, ge=0.1, le=5.0, description="Contrast adjustment factor"),
     contrast_method: str = Query("linear", regex="^(linear|histogram|clahe|gamma)$"),
     db: Session = Depends(get_db),
@@ -466,7 +466,6 @@ async def explain_detection(
     - **Grad-CAM**: Class Activation Mapping showing defect localization
     - **LIME**: Local Interpretable Model-agnostic Explanations with superpixels
     - **SHAP**: SHapley Additive exPlanations for pixel-level attribution
-    - **Integrated Gradients**: Gradient-based attribution along path from baseline
     - **Aggregated**: Consensus heatmap combining multiple methods
     - Class probabilities for all defect types
     - Natural language description of findings
@@ -546,8 +545,8 @@ async def explain_detection(
                 if 'aggregated' in explanation_result:
                     aggregated_heatmap = explanation_result['aggregated']['overlay_base64']
                     consensus_score = explanation_result['aggregated'].get('consensus_score', 0.0)
-                    # Ensure consensus_score is valid
-                    if consensus_score is None or (isinstance(consensus_score, float) and (math.isnan(consensus_score) or consensus_score == 0.0)):
+                    # Only replace consensus_score if it's None or NaN (not if it's 0.0, which is valid)
+                    if consensus_score is None or (isinstance(consensus_score, float) and math.isnan(consensus_score)):
                         consensus_score = explanation_result['prediction']['confidence']
                 else:
                     first_method = list(explanation_result['methods'].values())[0]
@@ -1125,9 +1124,10 @@ async def get_metrics(
         raise HTTPException(status_code=500, detail=f"Metrics retrieval failed: {str(e)}")
 
 
-@router.post("/export", response_model=ExportResponse)
+@router.post("/export/{format}")
 async def export_report(
-    request: ExportRequest,
+    format: str,
+    request: Dict[str, Any] = Body(...),
     # Auth disabled,
 ):
     """
@@ -1137,39 +1137,122 @@ async def export_report(
     containing detection results, explanations, and metrics.
     
     Args:
-        request: ExportRequest with report parameters
+        format: Report format (pdf or excel)
+        request: Request body with analysis data
         current_user: Authenticated user information
         
     Returns:
-        ExportResponse with download URL
+        Export response with download URL
     """
     try:
+        # Validate format
+        if format not in ['pdf', 'excel', 'preview']:
+            raise HTTPException(status_code=400, detail=f"Invalid format: {format}. Must be 'pdf' or 'excel'")
+        
         # Generate report filename
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"qc_report_{timestamp}.{request.format}"
+        analysis_id = request.get('analysis_id', 'unknown')
+        filename = f"qc_report_{analysis_id}_{timestamp}.{format}"
         filepath = EXPORTS_DIR / filename
         
-        # In production, this would generate an actual PDF/Excel report
-        # For now, we'll create a placeholder file
-        with open(filepath, "w") as f:
-            f.write(f"Quality Control Report\n")
-            f.write(f"Generated: {datetime.now()}\n")
-            f.write(f"Image IDs: {', '.join(request.image_ids)}\n")
-            f.write(f"Requested by: system\n")
+        # Extract data from request
+        analysis_data = request.get('data', {}).get('analysis', {})
+        detections = request.get('data', {}).get('detections', [])
+        explanations = request.get('data', {}).get('explanations', [])
+        options = request.get('options', {})
         
-        response = ExportResponse(
-            export_id=f"export_{timestamp}",
-            download_url=f"/api/xai-qc/download/{filename}",
-            format=request.format,
-            timestamp=datetime.now(),
-            expires_at=datetime.now(),  # In production, set expiration time
+        logger.info(f"📊 Exporting {format.upper()} report for analysis {analysis_id}")
+        logger.info(f"   Analysis data keys: {list(analysis_data.keys())}")
+        logger.info(f"   Detections type: {type(detections)}")
+        logger.info(f"   Explanations type: {type(explanations)}")
+        logger.info(f"   Options: {options}")
+        
+        # Robustness fix: Ensure detections is a list of dicts
+        safe_detections = []
+        if isinstance(detections, list):
+            for d in detections:
+                if isinstance(d, dict):
+                    safe_detections.append(d)
+                elif hasattr(d, 'dict'):  # Pydantic model
+                    safe_detections.append(d.dict())
+                else:
+                    logger.warning(f"Skipping invalid detection item of type {type(d)}")
+        
+        # Robustness fix: Ensure explanations is a list of dicts
+        safe_explanations = []
+        if isinstance(explanations, dict):
+            # If the entire ExplanationResponse was passed, try to find the list inside
+            if 'explanations' in explanations and isinstance(explanations['explanations'], list):
+                logger.info("Found explanations list inside explanation object")
+                raw_list = explanations['explanations']
+                for e in raw_list:
+                    if isinstance(e, dict):
+                        safe_explanations.append(e)
+            else:
+                 logger.warning("Explanation object passed but no 'explanations' list found inside")
+        elif isinstance(explanations, list):
+            for e in explanations:
+                if isinstance(e, dict):
+                    safe_explanations.append(e)
+                elif hasattr(e, 'dict'):
+                    safe_explanations.append(e.dict())
+                else:
+                    logger.warning(f"Skipping invalid explanation item of type {type(e)}")
+
+        logger.info(f"   Safe Detections: {len(safe_detections)}")
+        logger.info(f"   Safe Explanations: {len(safe_explanations)}")
+        
+        if format == 'pdf' or format == 'preview':
+            # Import here to avoid circular dependencies if any (though unlikely here)
+            from utils.report_generator import generate_pdf_report
+            logger.info(f"Generating {'Preview' if format == 'preview' else 'PDF'} report...")
+            
+            # For preview, we force PDF format but might keep the filename distinct
+            if format == 'preview':
+                 filename = f"preview_{analysis_id}_{timestamp}.pdf"
+                 filepath = EXPORTS_DIR / filename
+            
+            generate_pdf_report(
+                str(filepath), 
+                analysis_id, 
+                analysis_data, 
+                safe_detections, 
+                safe_explanations, 
+                options
+            )
+        elif format == 'excel':
+            from utils.report_generator import generate_excel_report
+            logger.info("Generating Excel report...")
+            generate_excel_report(
+                str(filepath), 
+                analysis_id, 
+                analysis_data, 
+                safe_detections, 
+                safe_explanations, 
+                options
+            )
+        
+        # Return download URL
+        download_url = f"/api/xai-qc/download/{filename}"
+        
+        if format == 'preview':
+             return {
+                "preview_url": download_url
+             }
+        
+        logger.info(f"✅ Report exported successfully: {filename}")
+        
+        # For actual export (download), return the file directly as the frontend expects a blob
+        return FileResponse(
+            filepath, 
+            filename=filename,
+            media_type='application/pdf' if format == 'pdf' else 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
         )
         
-        logger.info(f"Report exported: {filename} by user system")
-        return response
-        
     except Exception as e:
-        logger.error(f"Export failed: {str(e)}")
+        logger.error(f"❌ Export failed: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"Export failed: {str(e)}")
 
 

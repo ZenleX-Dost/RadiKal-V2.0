@@ -170,15 +170,27 @@ class YOLOv8ClassifierGradCAM:
             with torch.enable_grad():
                 output = self.pytorch_model(image_tensor)
             
-            # Get target class score
+            # Get target class score - handle different output formats
+            if isinstance(output, tuple):
+                # YOLOv8 returns tuple, take first element
+                output = output[0]
+            
             if isinstance(output, torch.Tensor):
-                target_score = output[0, target_class]
+                # Clone to avoid in-place modification issues
+                target_score = output[0, target_class].clone()
+            elif isinstance(output, dict):
+                scores = output.get('logits', output.get('scores', None))
+                if scores is not None:
+                    target_score = scores[0, target_class].clone()
+                else:
+                    raise ValueError("Cannot find scores in output")
             else:
-                # Handle dict output
-                target_score = output['logits'][0, target_class] if 'logits' in output else output['scores'][0, target_class]
+                raise ValueError(f"Unexpected output type: {type(output)}")
             
             # Backward pass
             self.pytorch_model.zero_grad()
+            if image_tensor.grad is not None:
+                image_tensor.grad.zero_()
             target_score.backward(retain_graph=False)
             
         except RuntimeError as e:

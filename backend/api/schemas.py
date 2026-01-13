@@ -19,7 +19,6 @@ class XAIMethod(str, Enum):
     GRADCAM = "gradcam"
     SHAP = "shap"
     LIME = "lime"
-    INTEGRATED_GRADIENTS = "ig"
     ALL = "all"
 
 

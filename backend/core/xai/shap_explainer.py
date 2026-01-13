@@ -89,20 +89,31 @@ class SHAPExplainer:
             # Forward pass
             output = self.pytorch_model(image)
             
+            # Handle YOLOv8 output which can be a tuple or object
+            if isinstance(output, tuple):
+                # YOLOv8 returns tuple, first element has the scores
+                output = output[0]
+            
             if isinstance(output, dict):
                 scores = output.get('scores', output.get('logits', output.get('pred', None)))
             elif hasattr(output, 'probs'):
-                # YOLO output
-                scores = output.probs.data.unsqueeze(0)
-            else:
+                # YOLO output object
+                scores = output.probs.data.unsqueeze(0) if len(output.probs.data.shape) == 1 else output.probs.data
+            elif isinstance(output, torch.Tensor):
                 scores = output
+            else:
+                logger.warning(f"Unexpected output type: {type(output)}")
+                return np.zeros((3, image.shape[-2], image.shape[-1]))
             
             if scores is None:
                 return np.zeros((3, image.shape[-2], image.shape[-1]))
             
-            # Ensure scores have proper shape
+            # Ensure scores have proper shape (batch_size, num_classes)
             if len(scores.shape) == 1:
                 scores = scores.unsqueeze(0)
+            elif len(scores.shape) > 2:
+                # Flatten extra dimensions
+                scores = scores.view(scores.shape[0], -1)
             
             # Get score for target class
             target_score = scores[0, target_class]

@@ -362,6 +362,7 @@ class ClassificationExplainer:
                     'metadata': cam_info
                 }
                 heatmaps_for_aggregation['gradcam'] = heatmap
+                logger.info("✓ Grad-CAM heatmap generated and added to aggregation")
                 
             except Exception as e:
                 logger.error(f"Grad-CAM failed: {e}")
@@ -370,31 +371,39 @@ class ClassificationExplainer:
         # Generate LIME
         if 'lime' in methods:
             if not LIME_AVAILABLE or self.lime is None:
+                logger.warning("LIME not available - sklearn/lime dependencies missing")
                 results['methods']['lime'] = {'error': 'LIME not available - sklearn/lime dependencies missing'}
             else:
                 try:
                     logger.info("Generating LIME explanation...")
-                    lime_overlay, lime_metadata = self.lime.explain(
+                    # Generate LIME heatmap for aggregation
+                    lime_heatmap = self.lime.generate_heatmap(
                         original_image,
                         target_class=target_class,
-                        num_samples=300,  # Faster inference
-                        num_features=8
+                        normalize=True
                     )
                     
+                    # Generate overlay for display
+                    lime_overlay = self.gradcam.generate_overlay(original_image, lime_heatmap, alpha=0.4)
+                    
                     results['methods']['lime'] = {
+                        'heatmap_base64': self._heatmap_to_base64(lime_heatmap),
                         'overlay_base64': self._image_to_base64(lime_overlay),
-                        'confidence_score': lime_metadata.get('explanation_score', 0.0),
-                        'metadata': lime_metadata
+                        'confidence_score': float(pred_result['confidence']),
+                        'metadata': {'method': 'LIME superpixel-based explanation'}
                     }
-                    # Note: LIME doesn't produce a clean heatmap for aggregation
+                    # Add LIME heatmap for aggregation
+                    heatmaps_for_aggregation['lime'] = lime_heatmap
+                    logger.info("✓ LIME heatmap generated and added to aggregation")
                     
                 except Exception as e:
-                    logger.error(f"LIME failed: {e}")
+                    logger.error(f"✗ LIME failed: {e}", exc_info=True)
                     results['methods']['lime'] = {'error': str(e)}
         
         # Generate SHAP
         if 'shap' in methods:
             if not SHAP_AVAILABLE or self.shap_explainer is None:
+                logger.warning("SHAP not available - shap dependency missing")
                 results['methods']['shap'] = {'error': 'SHAP not available - shap dependency missing'}
             else:
                 try:
@@ -412,40 +421,58 @@ class ClassificationExplainer:
                     img_rgb = cv2.cvtColor(original_image, cv2.COLOR_BGR2RGB)
                     img_tensor = transform(img_rgb).unsqueeze(0)
                     
-                    # explain() returns (visualization, metadata)
-                    shap_visualization, shap_metadata = self.shap_explainer.explain(img_tensor, target_class=target_class)
+                    # Generate SHAP heatmap for aggregation
+                    shap_heatmap = self.shap_explainer.generate_heatmap(
+                        img_tensor,
+                        target_class=target_class,
+                        normalize=True
+                    )
                     
-                    # Convert to BGR for consistency
-                    shap_heatmap_bgr = cv2.cvtColor(shap_visualization, cv2.COLOR_RGB2BGR)
+                    # Generate overlay for display
+                    shap_overlay = self.gradcam.generate_overlay(original_image, shap_heatmap, alpha=0.4)
                     
                     results['methods']['shap'] = {
-                        'overlay_base64': self._image_to_base64(shap_heatmap_bgr),
+                        'heatmap_base64': self._heatmap_to_base64(shap_heatmap),
+                        'overlay_base64': self._image_to_base64(shap_overlay),
                         'confidence_score': float(pred_result['confidence']),
-                        'metadata': shap_metadata
+                        'metadata': {'method': 'SHAP gradient-based explanation'}
                     }
+                    # Add SHAP heatmap for aggregation
+                    heatmaps_for_aggregation['shap'] = shap_heatmap
+                    logger.info("✓ SHAP heatmap generated and added to aggregation")
                     
                 except Exception as e:
-                    logger.error(f"SHAP failed: {e}")
+                    logger.error(f"✗ SHAP failed: {e}", exc_info=True)
                     results['methods']['shap'] = {'error': str(e)}
         
         # Aggregate heatmaps if requested and multiple methods succeeded
         if include_aggregated and len(heatmaps_for_aggregation) > 1 and self._aggregator is not None:
             try:
-                logger.info(f"Aggregating {len(heatmaps_for_aggregation)} heatmaps...")
+                logger.info(f"Aggregating {len(heatmaps_for_aggregation)} heatmaps: {list(heatmaps_for_aggregation.keys())}")
                 aggregated_heatmap = self._aggregator.aggregate(heatmaps_for_aggregation)
                 aggregated_overlay = self.gradcam.generate_overlay(original_image, aggregated_heatmap, alpha=0.4)
+                
+                # Compute real consensus score
+                consensus_score = self._aggregator.compute_consensus_score(
+                    heatmaps_for_aggregation,
+                    method='correlation'  # Use correlation-based consensus
+                )
+                
+                logger.info(f"Consensus score computed: {consensus_score:.4f} from {len(heatmaps_for_aggregation)} methods")
                 
                 results['aggregated'] = {
                     'heatmap_base64': self._heatmap_to_base64(aggregated_heatmap),
                     'overlay_base64': self._image_to_base64(aggregated_overlay),
-                    'consensus_score': float(pred_result['confidence']),
+                    'consensus_score': float(consensus_score),  # Real consensus from aggregator
                     'methods_used': list(heatmaps_for_aggregation.keys())
                 }
                 
             except Exception as e:
                 logger.error(f"Aggregation failed: {e}")
+        else:
+            logger.warning(f"Skipping aggregation - include_aggregated={include_aggregated}, methods={len(heatmaps_for_aggregation)}, aggregator={self._aggregator is not None}")
         
-        logger.info(f"Multi-method explanation complete. Methods: {list(results['methods'].keys())}")
+        logger.info(f"Multi-method explanation complete. Methods attempted: {list(results['methods'].keys())}, Methods for aggregation: {list(heatmaps_for_aggregation.keys())}")
         return results
     
     def create_visualization_panel(
@@ -581,17 +608,17 @@ class ClassificationExplainer:
         
         if severity == 'CRITICAL':
             recommendation = (
-                "⚠️ CRITICAL: This weld requires immediate attention. "
+                "CRITICAL: This weld requires immediate attention. "
                 "Recommend rejection and repair according to welding procedure specifications."
             )
         elif severity == 'MEDIUM':
             recommendation = (
-                "⚡ MEDIUM: Assess defect density and size against acceptance criteria. "
+                "MEDIUM: Assess defect density and size against acceptance criteria. "
                 "May require further evaluation or repair depending on standards."
             )
         else:
             recommendation = (
-                "✅ ACCEPTABLE: Weld meets quality standards. "
+                "ACCEPTABLE: Weld meets quality standards. "
                 "Proceed with production or final inspection."
             )
         

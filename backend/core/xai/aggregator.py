@@ -164,14 +164,27 @@ class XAIAggregator:
                 h1_flat = heatmaps[i].flatten()
                 h2_flat = heatmaps[j].flatten()
                 
+                # Debug: Check if heatmaps are identical or all zeros
+                h1_unique = len(np.unique(h1_flat))
+                h2_unique = len(np.unique(h2_flat))
+                
                 corr = np.corrcoef(h1_flat, h2_flat)[0, 1]
+                
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.info(f"Correlation pair {i}-{j}: {corr:.4f} (unique values: {h1_unique}, {h2_unique})")
+                
                 if not np.isnan(corr):
                     correlations.append(corr)
         
         if not correlations:
             return 0.0
         
-        return float(np.mean(correlations))
+        avg_corr = float(np.mean(correlations))
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"Average correlation across {len(correlations)} pairs: {avg_corr:.4f}")
+        return avg_corr
     
     def _compute_pairwise_iou(
         self,
