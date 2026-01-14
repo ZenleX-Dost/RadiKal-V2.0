@@ -1,0 +1,88 @@
+site_name: RadiKal V2.0 Documentation
+site_description: Explainable AI for Automated Weld Defect Detection in Radiographic Images
+site_author: RadiKal Development Team
+site_url: https://radikal-v2.readthedocs.io
+
+repo_name: ZenleX-Dost/RadiKal-V2.0
+repo_url: https://github.com/ZenleX-Dost/RadiKal-V2.0
+
+copyright: Copyright &copy; 2026 RadiKal Project
+
+theme:
+  name: material
+  palette:
+    # Palette toggle for light mode
+    - scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    # Palette toggle for dark mode
+    - scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.code.annotate
+
+plugins:
+  - search
+  - awesome-pages
+
+markdown_extensions:
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - admonition
+  - pymdownx.details
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - tables
+  - attr_list
+  - md_in_html
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - Getting Started:
+      - Quick Start: getting-started.md
+      - Installation: installation.md
+  - User Guide:
+      - Overview: user-guide.md
+      - Image Analysis: user-guide.md#image-analysis
+      - Batch Processing: user-guide.md#batch-processing
+      - Export Results: user-guide.md#export-results
+  - Technical Documentation:
+      - Architecture: architecture.md
+      - API Reference: api-reference.md
+      - SAM2 Integration: sam2-guide.md
+      - XAI Methods: xai-methods.md
+  - Operations:
+      - Deployment: deployment.md
+      - Testing: testing.md
+      - Troubleshooting: troubleshooting.md
+  - Dataset:
+      - RIAWELC Dataset: RIAWELC_DATASET_INFO.md
+
+extra:
+  version:
+    provider: mike
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/ZenleX-Dost/RadiKal-V2.0
