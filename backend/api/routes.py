@@ -1259,13 +1259,15 @@ async def export_report(
 @router.get("/download/{filename}")
 async def download_report(
     filename: str,
+    preview: bool = False,
     # Auth disabled,
 ):
     """
-    Download an exported report file.
+    Download or preview an exported report file.
     
     Args:
         filename: Name of the report file
+        preview: If True, display inline in browser instead of downloading
         current_user: Authenticated user information
         
     Returns:
@@ -1279,8 +1281,28 @@ async def download_report(
     if not filepath.exists():
         raise HTTPException(status_code=404, detail="Report not found")
     
-    logger.info(f"Report downloaded: {filename} by user system")
-    return FileResponse(filepath, filename=filename)
+    # Determine media type
+    media_type = None
+    if filename.endswith('.pdf'):
+        media_type = 'application/pdf'
+    elif filename.endswith('.xlsx'):
+        media_type = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    
+    logger.info(f"Report {'previewed' if preview else 'downloaded'}: {filename} by user system")
+    
+    # If preview mode and it's a PDF, display inline
+    if preview and filename.endswith('.pdf'):
+        return FileResponse(
+            filepath, 
+            media_type=media_type,
+            headers={"Content-Disposition": f"inline; filename={filename}"}
+        )
+    else:
+        return FileResponse(
+            filepath, 
+            filename=filename,
+            media_type=media_type
+        )
 
 
 @router.get("/calibration", response_model=CalibrationResponse)
